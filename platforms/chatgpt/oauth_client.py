@@ -701,89 +701,56 @@ class OAuthClient:
         """提交邮箱，获取 OAuth 流程的第一页状态。"""
         self._log("步骤2: POST /api/accounts/authorize/continue")
 
-        self._log(f"authorize_continue: device_id={device_id}")
-        sentinel_token = get_sentinel_token_via_browser(
-            flow="authorize_continue",
-            proxy=self.proxy,
-            page_url=continue_referer or f"{self.oauth_issuer}/log-in",
-            headless=self.browser_mode != "headed",
-            device_id=device_id,
-            log_fn=lambda msg: self._log(f"authorize_continue: {msg}"),
-        )
-        if sentinel_token:
-            self._log("authorize_continue: 已通过 Playwright SentinelSDK 获取 token")
-        else:
-            sentinel_token = build_sentinel_token(
-                self.session,
-                device_id,
-                flow="authorize_continue",
-                user_agent=user_agent,
-                sec_ch_ua=sec_ch_ua,
-                impersonate=impersonate,
-            )
-            if sentinel_token:
-                self._log("authorize_continue: 已通过 HTTP PoW 获取 token")
-            else:
-                self._set_error("无法获取 sentinel token (authorize_continue)")
-                return None
-
         request_url = f"{self.oauth_issuer}/api/accounts/authorize/continue"
-        headers = self._headers(
-            request_url,
-            user_agent=user_agent,
-            sec_ch_ua=sec_ch_ua,
-            accept="application/json",
-            referer=continue_referer,
-            origin=self.oauth_issuer,
-            content_type="application/json",
-            fetch_site="same-origin",
-            extra_headers={
-                "oai-device-id": device_id,
-                "openai-sentinel-token": sentinel_token,
-            },
-        )
-        headers.update(generate_datadog_trace())
         payload = {"username": {"kind": "email", "value": email}}
         if screen_hint:
             payload["screen_hint"] = str(screen_hint).strip()
 
-        try:
-            kwargs = {
-                "json": payload,
-                "headers": headers,
-                "timeout": 30,
-                "allow_redirects": False,
-            }
-            if impersonate:
-                kwargs["impersonate"] = impersonate
-
-            self._browser_pause()
-            r = self.session.post(request_url, **kwargs)
-            self._log(f"/authorize/continue -> {r.status_code}")
-
-            if (
-                r.status_code == 400
-                and "invalid_auth_step" in (r.text or "")
-                and authorize_url
-                and authorize_params
-            ):
-                self._log("invalid_auth_step，重新 bootstrap...")
-                authorize_final_url = self._bootstrap_oauth_session(
-                    authorize_url,
-                    authorize_params,
-                    device_id=device_id,
+        current_referer = continue_referer
+        for attempt in range(2):
+            self._log(f"authorize_continue: device_id={device_id}")
+            sentinel_token = get_sentinel_token_via_browser(
+                flow="authorize_continue",
+                proxy=self.proxy,
+                page_url=current_referer or f"{self.oauth_issuer}/log-in",
+                headless=self.browser_mode != "headed",
+                device_id=device_id,
+                log_fn=lambda msg: self._log(f"authorize_continue: {msg}"),
+            )
+            if sentinel_token:
+                self._log("authorize_continue: 已通过 Playwright SentinelSDK 获取 token")
+            else:
+                sentinel_token = build_sentinel_token(
+                    self.session,
+                    device_id,
+                    flow="authorize_continue",
                     user_agent=user_agent,
                     sec_ch_ua=sec_ch_ua,
                     impersonate=impersonate,
                 )
-                continue_referer = (
-                    authorize_final_url
-                    if authorize_final_url.startswith(self.oauth_issuer)
-                    else f"{self.oauth_issuer}/log-in"
-                )
-                headers["Referer"] = continue_referer
-                headers["Sec-Fetch-Site"] = "same-origin"
-                headers.update(generate_datadog_trace())
+                if sentinel_token:
+                    self._log("authorize_continue: 已通过 HTTP PoW 获取 token")
+                else:
+                    self._set_error("无法获取 sentinel token (authorize_continue)")
+                    return None
+
+            headers = self._headers(
+                request_url,
+                user_agent=user_agent,
+                sec_ch_ua=sec_ch_ua,
+                accept="application/json",
+                referer=current_referer,
+                origin=self.oauth_issuer,
+                content_type="application/json",
+                fetch_site="same-origin",
+                extra_headers={
+                    "oai-device-id": device_id,
+                    "openai-sentinel-token": sentinel_token,
+                },
+            )
+            headers.update(generate_datadog_trace())
+
+            try:
                 kwargs = {
                     "json": payload,
                     "headers": headers,
@@ -792,23 +759,91 @@ class OAuthClient:
                 }
                 if impersonate:
                     kwargs["impersonate"] = impersonate
+
                 self._browser_pause()
                 r = self.session.post(request_url, **kwargs)
-                self._log(f"/authorize/continue(重试) -> {r.status_code}")
+                self._log(f"/authorize/continue -> {r.status_code}")
 
-            if r.status_code != 200:
-                self._set_error(f"提交邮箱失败: {r.status_code} - {r.text[:180]}")
+                if r.status_code == 429 and attempt == 0:
+                    wait_seconds = round(random.uniform(2.0, 4.5), 2)
+                    self._log(
+                        f"authorize_continue: 429 限流，等待 {wait_seconds}s 后重试"
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+
+                if (
+                    r.status_code == 409
+                    and "invalid_state" in (r.text or "")
+                    and authorize_url
+                    and authorize_params
+                    and attempt == 0
+                ):
+                    self._log("invalid_state，重新 bootstrap 后重试...")
+                    authorize_final_url = self._bootstrap_oauth_session(
+                        authorize_url,
+                        authorize_params,
+                        device_id=device_id,
+                        user_agent=user_agent,
+                        sec_ch_ua=sec_ch_ua,
+                        impersonate=impersonate,
+                    )
+                    current_referer = (
+                        authorize_final_url
+                        if authorize_final_url.startswith(self.oauth_issuer)
+                        else f"{self.oauth_issuer}/log-in"
+                    )
+                    continue
+
+                if (
+                    r.status_code == 400
+                    and "invalid_auth_step" in (r.text or "")
+                    and authorize_url
+                    and authorize_params
+                ):
+                    self._log("invalid_auth_step，重新 bootstrap...")
+                    authorize_final_url = self._bootstrap_oauth_session(
+                        authorize_url,
+                        authorize_params,
+                        device_id=device_id,
+                        user_agent=user_agent,
+                        sec_ch_ua=sec_ch_ua,
+                        impersonate=impersonate,
+                    )
+                    current_referer = (
+                        authorize_final_url
+                        if authorize_final_url.startswith(self.oauth_issuer)
+                        else f"{self.oauth_issuer}/log-in"
+                    )
+                    headers["Referer"] = current_referer
+                    headers["Sec-Fetch-Site"] = "same-origin"
+                    headers.update(generate_datadog_trace())
+                    kwargs = {
+                        "json": payload,
+                        "headers": headers,
+                        "timeout": 30,
+                        "allow_redirects": False,
+                    }
+                    if impersonate:
+                        kwargs["impersonate"] = impersonate
+                    self._browser_pause()
+                    r = self.session.post(request_url, **kwargs)
+                    self._log(f"/authorize/continue(重试) -> {r.status_code}")
+
+                if r.status_code != 200:
+                    self._set_error(f"提交邮箱失败: {r.status_code} - {r.text[:180]}")
+                    return None
+
+                data = r.json()
+                flow_state = self._state_from_payload(
+                    data, current_url=str(r.url) or request_url
+                )
+                self._log(describe_flow_state(flow_state))
+                return flow_state
+            except Exception as e:
+                self._set_error(f"提交邮箱异常: {e}")
                 return None
-
-            data = r.json()
-            flow_state = self._state_from_payload(
-                data, current_url=str(r.url) or request_url
-            )
-            self._log(describe_flow_state(flow_state))
-            return flow_state
-        except Exception as e:
-            self._set_error(f"提交邮箱异常: {e}")
-            return None
+        return None
 
     def _submit_password_verify(
         self,
@@ -823,76 +858,90 @@ class OAuthClient:
         """提交密码，获取下一步状态。"""
         self._log("步骤3: POST /api/accounts/password/verify")
 
-        self._log(f"password_verify: device_id={device_id}")
-        sentinel_pwd = get_sentinel_token_via_browser(
-            flow="password_verify",
-            proxy=self.proxy,
-            page_url=referer or f"{self.oauth_issuer}/log-in/password",
-            headless=self.browser_mode != "headed",
-            device_id=device_id,
-            log_fn=lambda msg: self._log(f"password_verify: {msg}"),
-        )
-        if sentinel_pwd:
-            self._log("password_verify: 已通过 Playwright SentinelSDK 获取 token")
-        else:
-            sentinel_pwd = build_sentinel_token(
-                self.session,
-                device_id,
+        request_url = f"{self.oauth_issuer}/api/accounts/password/verify"
+        payload = {"password": password}
+
+        for attempt in range(2):
+            self._log(f"password_verify: device_id={device_id}")
+            sentinel_pwd = get_sentinel_token_via_browser(
                 flow="password_verify",
-                user_agent=user_agent,
-                sec_ch_ua=sec_ch_ua,
-                impersonate=impersonate,
+                proxy=self.proxy,
+                page_url=referer or f"{self.oauth_issuer}/log-in/password",
+                headless=self.browser_mode != "headed",
+                device_id=device_id,
+                log_fn=lambda msg: self._log(f"password_verify: {msg}"),
             )
             if sentinel_pwd:
-                self._log("password_verify: 已通过 HTTP PoW 获取 token")
+                self._log("password_verify: 已通过 Playwright SentinelSDK 获取 token")
             else:
-                self._set_error("无法获取 sentinel token (password_verify)")
-                return None
+                sentinel_pwd = build_sentinel_token(
+                    self.session,
+                    device_id,
+                    flow="password_verify",
+                    user_agent=user_agent,
+                    sec_ch_ua=sec_ch_ua,
+                    impersonate=impersonate,
+                )
+                if sentinel_pwd:
+                    self._log("password_verify: 已通过 HTTP PoW 获取 token")
+                else:
+                    self._set_error("无法获取 sentinel token (password_verify)")
+                    return None
 
-        request_url = f"{self.oauth_issuer}/api/accounts/password/verify"
-        headers = self._headers(
-            request_url,
-            user_agent=user_agent,
-            sec_ch_ua=sec_ch_ua,
-            accept="application/json",
-            referer=referer or f"{self.oauth_issuer}/log-in/password",
-            origin=self.oauth_issuer,
-            content_type="application/json",
-            fetch_site="same-origin",
-            extra_headers={
-                "oai-device-id": device_id,
-                "openai-sentinel-token": sentinel_pwd,
-            },
-        )
-        headers.update(generate_datadog_trace())
-
-        try:
-            kwargs = {
-                "json": {"password": password},
-                "headers": headers,
-                "timeout": 30,
-                "allow_redirects": False,
-            }
-            if impersonate:
-                kwargs["impersonate"] = impersonate
-
-            self._browser_pause()
-            r = self.session.post(request_url, **kwargs)
-            self._log(f"/password/verify -> {r.status_code}")
-
-            if r.status_code != 200:
-                self._set_error(f"密码验证失败: {r.status_code} - {r.text[:180]}")
-                return None
-
-            data = r.json()
-            flow_state = self._state_from_payload(
-                data, current_url=str(r.url) or request_url
+            headers = self._headers(
+                request_url,
+                user_agent=user_agent,
+                sec_ch_ua=sec_ch_ua,
+                accept="application/json",
+                referer=referer or f"{self.oauth_issuer}/log-in/password",
+                origin=self.oauth_issuer,
+                content_type="application/json",
+                fetch_site="same-origin",
+                extra_headers={
+                    "oai-device-id": device_id,
+                    "openai-sentinel-token": sentinel_pwd,
+                },
             )
-            self._log(f"verify {describe_flow_state(flow_state)}")
-            return flow_state
-        except Exception as e:
-            self._set_error(f"密码验证异常: {e}")
-            return None
+            headers.update(generate_datadog_trace())
+
+            try:
+                kwargs = {
+                    "json": payload,
+                    "headers": headers,
+                    "timeout": 30,
+                    "allow_redirects": False,
+                }
+                if impersonate:
+                    kwargs["impersonate"] = impersonate
+
+                self._browser_pause()
+                r = self.session.post(request_url, **kwargs)
+                self._log(f"/password/verify -> {r.status_code}")
+
+                if r.status_code == 429 and attempt == 0:
+                    wait_seconds = round(random.uniform(2.0, 4.5), 2)
+                    self._log(
+                        f"password_verify: 429 限流，等待 {wait_seconds}s 后重试"
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+
+                if r.status_code != 200:
+                    self._set_error(
+                        f"密码验证失败: {r.status_code} - {r.text[:180]}"
+                    )
+                    return None
+
+                data = r.json()
+                flow_state = self._state_from_payload(
+                    data, current_url=str(r.url) or request_url
+                )
+                self._log(f"verify {describe_flow_state(flow_state)}")
+                return flow_state
+            except Exception as e:
+                self._set_error(f"密码验证异常: {e}")
+                return None
+        return None
 
     def _send_passwordless_login_otp(
         self,

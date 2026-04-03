@@ -1,7 +1,9 @@
 """邮箱池基类 - 抽象临时邮箱/收件服务"""
 
 import json
+import os
 import random
+import tempfile
 import threading
 import time
 
@@ -3240,36 +3242,81 @@ class OutlookMailbox(BaseMailbox):
         try:
             self._imap_port = int(imap_port or 993)
         except (TypeError, ValueError):
-            self._imap_port = 993
+        self._imap_port = 993
         self._token_endpoint = str(token_endpoint or "").strip()
+
+    def _acquire_pool_lock(self, timeout: float = 20.0):
+        lock_path = os.path.join(
+            tempfile.gettempdir(), "any-auto-register.outlook.lock"
+        )
+        lock_file = open(lock_path, "a+")
+        start = time.monotonic()
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return lock_file
+            except OSError:
+                if time.monotonic() - start >= float(timeout or 0):
+                    lock_file.close()
+                    raise RuntimeError("Outlook 账号池锁获取超时")
+                time.sleep(0.05)
+
+    def _release_pool_lock(self, lock_file) -> None:
+        if not lock_file:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            try:
+                lock_file.close()
+            except Exception:
+                pass
 
     def _pop_account(self) -> dict:
         from sqlmodel import Session, select
         from core.db import engine, OutlookAccountModel
 
-        with self._lock:
-            with Session(engine) as session:
-                account = (
-                    session.exec(
-                        select(OutlookAccountModel)
-                        .where(OutlookAccountModel.enabled == True)
-                        .order_by(OutlookAccountModel.id)
+        lock_file = self._acquire_pool_lock()
+        try:
+            with self._lock:
+                with Session(engine) as session:
+                    account = (
+                        session.exec(
+                            select(OutlookAccountModel)
+                            .where(OutlookAccountModel.enabled == True)
+                            .order_by(OutlookAccountModel.id)
+                        )
+                        .first()
                     )
-                    .first()
-                )
-                if not account:
-                    raise RuntimeError("Outlook 账号池为空，请先在设置页批量导入")
+                    if not account:
+                        raise RuntimeError("Outlook 账号池为空，请先在设置页批量导入")
 
-                payload = {
-                    "id": account.id,
-                    "email": account.email,
-                    "password": account.password,
-                    "client_id": account.client_id,
-                    "refresh_token": account.refresh_token,
-                }
-                session.delete(account)
-                session.commit()
-                return payload
+                    payload = {
+                        "id": account.id,
+                        "email": account.email,
+                        "password": account.password,
+                        "client_id": account.client_id,
+                        "refresh_token": account.refresh_token,
+                    }
+                    session.delete(account)
+                    session.commit()
+                    return payload
+        finally:
+            self._release_pool_lock(lock_file)
 
     def get_email(self) -> MailboxAccount:
         payload = self._pop_account()
