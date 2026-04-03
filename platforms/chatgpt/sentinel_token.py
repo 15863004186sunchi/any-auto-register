@@ -49,56 +49,100 @@ class SentinelTokenGenerator:
         return format(h & 0xFFFFFFFF, "08x")
 
     def _get_config(self):
+        """
+        构造浏览器环境数据数组（完整仿真 PoW 参数）。
+
+        SDK 中的元素对应关系（按索引）：
+          [0]  screen.width + screen.height
+          [1]  new Date().toString()
+          [2]  performance.memory.jsHeapSizeLimit
+          [3]  Math.random()（后被 nonce 覆盖）
+          [4]  navigator.userAgent
+          [5]  随机 script src
+          [6]  脚本版本匹配
+          [7]  document.documentElement.data-build
+          [8]  navigator.language
+          [9]  navigator.languages.join(',')（后被耗时覆盖）
+          [10] Math.random()
+          [11] 随机 navigator 属性
+          [12] Object.keys(document) 随机一个
+          [13] Object.keys(window) 随机一个
+          [14] performance.now()
+          [15] self.sid
+          [16] URLSearchParams 参数
+          [17] navigator.hardwareConcurrency
+          [18] performance.timeOrigin
+        """
         from datetime import datetime, timezone
 
+        screen_info = "1920x1080"
         now = datetime.now(timezone.utc)
-        date_str = now.strftime("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)")
-        perf_now = random.uniform(1000, 50000)
-        time_origin = time.time() * 1000 - perf_now
-        nav_prop = random.choice(
-            [
-                "vendorSub",
-                "productSub",
-                "vendor",
-                "maxTouchPoints",
-                "scheduling",
-                "userActivation",
-                "doNotTrack",
-                "geolocation",
-                "connection",
-                "plugins",
-                "mimeTypes",
-                "pdfViewerEnabled",
-                "webkitTemporaryStorage",
-                "webkitPersistentStorage",
-                "hardwareConcurrency",
-                "cookieEnabled",
-                "credentials",
-                "mediaDevices",
-                "permissions",
-                "locks",
-                "ink",
-            ]
+        date_str = now.strftime(
+            "%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)"
         )
+        js_heap_limit = 4294705152
+        nav_random1 = random.random()
+        ua = self.user_agent
+        script_src = "https://sentinel.openai.com/sentinel/20260124ceb8/sdk.js"
+        script_version = None
+        data_build = None
+        language = "en-US"
+        languages = "en-US,en"
+        nav_random2 = random.random()
+        nav_props = [
+            "vendorSub",
+            "productSub",
+            "vendor",
+            "maxTouchPoints",
+            "scheduling",
+            "userActivation",
+            "doNotTrack",
+            "geolocation",
+            "connection",
+            "plugins",
+            "mimeTypes",
+            "pdfViewerEnabled",
+            "webkitTemporaryStorage",
+            "webkitPersistentStorage",
+            "hardwareConcurrency",
+            "cookieEnabled",
+            "credentials",
+            "mediaDevices",
+            "permissions",
+            "locks",
+            "ink",
+        ]
+        nav_prop = random.choice(nav_props)
+        nav_val = f"{nav_prop}−undefined"
+        doc_key = random.choice(
+            ["location", "implementation", "URL", "documentURI", "compatMode"]
+        )
+        win_key = random.choice(
+            ["Object", "Function", "Array", "Number", "parseFloat", "undefined"]
+        )
+        perf_now = random.uniform(1000, 50000)
+        hardware_concurrency = random.choice([4, 8, 12, 16])
+        time_origin = time.time() * 1000 - perf_now
+
         return [
-            "1920x1080",
+            screen_info,
             date_str,
-            4294705152,
-            random.random(),
-            self.user_agent,
-            "https://sentinel.openai.com/sentinel/20260124ceb8/sdk.js",
-            None,
-            None,
-            "en-US",
-            "en-US,en",
-            random.random(),
-            f"{nav_prop}−undefined",
-            random.choice(["location", "implementation", "URL", "documentURI", "compatMode"]),
-            random.choice(["Object", "Function", "Array", "Number", "parseFloat", "undefined"]),
+            js_heap_limit,
+            nav_random1,
+            ua,
+            script_src,
+            script_version,
+            data_build,
+            language,
+            languages,
+            nav_random2,
+            nav_val,
+            doc_key,
+            win_key,
             perf_now,
             self.sid,
             "",
-            random.choice([4, 8, 12, 16]),
+            hardware_concurrency,
             time_origin,
         ]
 
