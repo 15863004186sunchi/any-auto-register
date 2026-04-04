@@ -32,6 +32,7 @@ const SELECT_FIELDS: Record<string, { label: string; value: string }[]> = {
     { label: 'OpenTrashMail', value: 'opentrashmail' },
     { label: 'Freemail（自建 CF Worker）', value: 'freemail' },
     { label: 'CF Worker（自建域名）', value: 'cfworker' },
+    { label: 'Custom Catchall（Cloudflare 转发 + IMAP）', value: 'custom_catchall' },
   ],
   maliapi_auto_domain_strategy: [
     { label: 'balanced', value: 'balanced' },
@@ -207,6 +208,17 @@ const TAB_ITEMS = [
           { key: 'luckmail_api_key', label: 'API Key', secret: true },
           { key: 'luckmail_email_type', label: '邮箱类型（可选）', placeholder: 'ms_graph / ms_imap / self_built' },
           { key: 'luckmail_domain', label: '邮箱域名（可选）', placeholder: 'outlook.com / gmail.com' },
+        ],
+      },
+      {
+        title: 'Custom Catchall（Cloudflare + IMAP）',
+        desc: 'Cloudflare Catch-All 转发自定义域名邮件到 Gmail，通过 IMAP 拉取验证码',
+        fields: [
+          { key: 'catchall_domain', label: '自定义域名', placeholder: 'flapysun.com' },
+          { key: 'catchall_imap_host', label: 'IMAP 服务器', placeholder: 'imap.gmail.com' },
+          { key: 'catchall_imap_port', label: 'IMAP 端口', placeholder: '993' },
+          { key: 'catchall_imap_user', label: 'IMAP 用户名（Gmail 地址）', placeholder: 'you@gmail.com' },
+          { key: 'catchall_imap_password', label: 'IMAP 密码 / Gmail 应用密码', secret: true, placeholder: 'xxxxxxxxxxxx（无空格）' },
         ],
       },
     ],
