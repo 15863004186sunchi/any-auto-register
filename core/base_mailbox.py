@@ -488,6 +488,16 @@ def create_mailbox(
             token_endpoint=extra.get("outlook_token_endpoint", ""),
             proxy=proxy,
         )
+    elif provider == "custom_catchall":
+        return CustomCatchallMailbox(
+            domain=extra.get("catchall_domain", ""),
+            imap_host=extra.get("catchall_imap_host", "imap.gmail.com"),
+            imap_port=int(extra.get("catchall_imap_port", 993)),
+            imap_user=extra.get("catchall_imap_user", ""),
+            imap_password=extra.get("catchall_imap_password", ""),
+            imap_use_ssl=extra.get("catchall_imap_use_ssl", True),
+            proxy=proxy,
+        )
     else:  # laoudo
         return LaoudoMailbox(
             auth_token=extra.get("laoudo_auth", ""),
@@ -3815,4 +3825,241 @@ class FreemailMailbox(BaseMailbox):
             timeout=timeout,
             poll_interval=3,
             poll_once=poll_once,
+        )
+
+
+class CustomCatchallMailbox(BaseMailbox):
+    """
+    自定义 Catchall 域名邮箱服务。
+
+    原理：
+    1. 通过 Cloudflare Email Routing 的 Catch-All 规则，将 *@your-domain.com
+       的所有邮件转发到一个真实的 Gmail 账号。
+    2. 本类使用 IMAP 登录转发目标 Gmail (或其他 IMAP 服务)，
+       并在 Gmail 的 "To"/"Delivered-To" 字段上筛选出目标地址的邮件，从而提取 OTP。
+
+    配置示例 (前端全局设置页 -> 或 .env):
+        mail_provider       = custom_catchall
+        catchall_domain     = flapysun.com         # 你的自定义域名
+        catchall_imap_host  = imap.gmail.com        # IMAP 服务器
+        catchall_imap_port  = 993                   # IMAP 端口 (SSL)
+        catchall_imap_user  = geeksunchi@gmail.com  # IMAP 登录用户名
+        catchall_imap_password = xxxx xxxx xxxx xxxx  # Gmail 应用密码 (无空格)
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        imap_host: str = "imap.gmail.com",
+        imap_port: int = 993,
+        imap_user: str = "",
+        imap_password: str = "",
+        imap_use_ssl: bool = True,
+        proxy: str = None,
+    ):
+        import random
+        import string
+
+        self.domain = str(domain or "").strip().lower().lstrip("@")
+        if not self.domain:
+            raise ValueError("custom_catchall: catchall_domain 不能为空")
+
+        self.imap_host = str(imap_host or "imap.gmail.com").strip()
+        self.imap_port = int(imap_port or 993)
+        self.imap_user = str(imap_user or "").strip()
+        self.imap_password = str(imap_password or "").replace(" ", "").strip()
+        self.imap_use_ssl = bool(imap_use_ssl)
+        # proxy 不作用于 IMAP（imaplib 不支持），保留兼容性
+        self._proxy = proxy
+        self._local_part_len = 12
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _random_local_part(self) -> str:
+        import random
+        import string
+        chars = string.ascii_lowercase + string.digits
+        return "".join(random.choices(chars, k=self._local_part_len))
+
+    def _connect(self):
+        """建立并返回一个已认证的 IMAP 连接。"""
+        import imaplib
+
+        if self.imap_use_ssl:
+            conn = imaplib.IMAP4_SSL(self.imap_host, self.imap_port)
+        else:
+            conn = imaplib.IMAP4(self.imap_host, self.imap_port)
+        conn.login(self.imap_user, self.imap_password)
+        return conn
+
+    def _fetch_message_uids(self, conn, target_email: str, since_uid: int = 0) -> list[str]:
+        """
+        在 INBOX 和 [Gmail]/Spam (垃圾邮件) 两个文件夹中，
+        按 To/Delivered-To 字段搜索发给 target_email 的邮件 UID 列表。
+        """
+        import imaplib
+
+        result_uids: list[str] = []
+        folders = ["INBOX", "[Gmail]/Spam", "[Gmail]/All Mail"]
+
+        for folder in folders:
+            try:
+                status, _ = conn.select(folder, readonly=True)
+                if status != "OK":
+                    continue
+
+                # Gmail 支持 "TO" 关键字搜索
+                search_criteria = f'(TO "{target_email}")'
+                status, data = conn.uid("SEARCH", None, search_criteria)
+                if status != "OK" or not data or not data[0]:
+                    continue
+
+                uid_list = data[0].split()
+                for uid in uid_list:
+                    uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
+                    if uid_str and uid_str not in result_uids:
+                        result_uids.append(uid_str)
+            except Exception:
+                continue
+
+        return result_uids
+
+    def _fetch_message_text(self, conn, uid: str) -> tuple[str, str]:
+        """
+        获取邮件的 Subject 和纯文本正文。
+        返回 (subject, body_text)
+        """
+        import email as email_lib
+        import email.header as email_header
+
+        try:
+            status, data = conn.uid("FETCH", uid, "(RFC822)")
+            if status != "OK" or not data:
+                return "", ""
+            raw_bytes = data[0][1] if isinstance(data[0], tuple) else data[0]
+            if not raw_bytes:
+                return "", ""
+
+            msg = email_lib.message_from_bytes(
+                raw_bytes if isinstance(raw_bytes, bytes) else raw_bytes.encode()
+            )
+
+            # 解码 Subject
+            subject_raw = msg.get("Subject", "")
+            subject_parts = email_header.decode_header(subject_raw)
+            subject_text = ""
+            for part, charset in subject_parts:
+                if isinstance(part, bytes):
+                    subject_text += part.decode(charset or "utf-8", errors="ignore")
+                else:
+                    subject_text += str(part)
+
+            # 提取正文
+            body_parts = []
+            if msg.is_multipart():
+                for part in msg.walk():
+                    ctype = part.get_content_type()
+                    if ctype == "text/plain":
+                        payload = part.get_payload(decode=True)
+                        charset = part.get_content_charset() or "utf-8"
+                        if payload:
+                            body_parts.append(payload.decode(charset, errors="ignore"))
+                    elif ctype == "text/html" and not body_parts:
+                        payload = part.get_payload(decode=True)
+                        charset = part.get_content_charset() or "utf-8"
+                        if payload:
+                            body_parts.append(
+                                self._strip_html_to_text(payload.decode(charset, errors="ignore"))
+                            )
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    charset = msg.get_content_charset() or "utf-8"
+                    body_parts.append(payload.decode(charset, errors="ignore"))
+
+            return subject_text, "\n".join(body_parts)
+        except Exception:
+            return "", ""
+
+    # ------------------------------------------------------------------
+    # BaseMailbox interface
+    # ------------------------------------------------------------------
+
+    def get_email(self) -> "MailboxAccount":
+        """生成一个随机的 @<domain> 地址。"""
+        local = self._random_local_part()
+        email_addr = f"{local}@{self.domain}"
+        self._log(f"[CatchAll] 分配邮箱: {email_addr}")
+        return MailboxAccount(email=email_addr, account_id=email_addr)
+
+    def get_current_ids(self, account: "MailboxAccount") -> set:
+        """返回当前收件箱中所有发给该地址的邮件 UID 集合，用于过滤旧邮件。"""
+        try:
+            conn = self._connect()
+            uids = self._fetch_message_uids(conn, account.email)
+            try:
+                conn.logout()
+            except Exception:
+                pass
+            return set(uids)
+        except Exception as e:
+            self._log(f"[CatchAll] get_current_ids 失败: {e}")
+            return set()
+
+    def wait_for_code(
+        self,
+        account: "MailboxAccount",
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set = None,
+        code_pattern: str = None,
+        **kwargs,
+    ) -> str:
+        seen = set(str(uid) for uid in (before_ids or set()))
+        exclude_codes = {
+            str(code).strip()
+            for code in (kwargs.get("exclude_codes") or set())
+            if str(code or "").strip()
+        }
+        target_email = account.email
+        self._log(f"[CatchAll] 开始轮询 {target_email} 的验证码 (timeout={timeout}s)")
+
+        def poll_once() -> Optional[str]:
+            try:
+                conn = self._connect()
+                uids = self._fetch_message_uids(conn, target_email)
+                for uid in uids:
+                    if uid in seen:
+                        continue
+                    seen.add(uid)
+                    subject, body = self._fetch_message_text(conn, uid)
+                    search_text = f"{subject} {body}".strip()
+                    if keyword and keyword.lower() not in search_text.lower():
+                        continue
+                    code = self._safe_extract(search_text, code_pattern)
+                    if code and code in exclude_codes:
+                        continue
+                    if code:
+                        self._log(f"[CatchAll] 命中验证码: {code}")
+                        try:
+                            conn.logout()
+                        except Exception:
+                            pass
+                        return code
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+            except Exception as e:
+                self._log(f"[CatchAll] 轮询 IMAP 失败: {e}")
+            return None
+
+        return self._run_polling_wait(
+            timeout=timeout,
+            poll_interval=8,
+            poll_once=poll_once,
+            timeout_message=f"[CatchAll] 等待验证码超时 ({timeout}s)",
         )
