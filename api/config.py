@@ -91,6 +91,11 @@ CONFIG_KEYS = [
     "grok2api_quota",
     "kiro_manager_path",
     "kiro_manager_exe",
+    "catchall_domain",
+    "catchall_imap_host",
+    "catchall_imap_port",
+    "catchall_imap_user",
+    "catchall_imap_password",
 ]
 
 
