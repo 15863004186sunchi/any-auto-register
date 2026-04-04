@@ -3867,7 +3867,7 @@ class CustomCatchallMailbox(BaseMailbox):
         self.imap_host = str(imap_host or "imap.gmail.com").strip()
         self.imap_port = int(imap_port or 993)
         self.imap_user = str(imap_user or "").strip()
-        self.imap_password = str(imap_password or "").replace(" ", "").strip()
+        self.imap_password = str(imap_password or "").strip()  # 移除 .replace(" ", "")，保留用户输入的空格
         self.imap_use_ssl = bool(imap_use_ssl)
         # proxy 不作用于 IMAP（imaplib 不支持），保留兼容性
         self._proxy = proxy
@@ -3881,8 +3881,12 @@ class CustomCatchallMailbox(BaseMailbox):
     def _random_local_part(self) -> str:
         import random
         import string
-        chars = string.ascii_lowercase + string.digits
-        return "".join(random.choices(chars, k=self._local_part_len))
+        first_names = ["james", "mary", "john", "patricia", "robert", "jennifer", "michael", "linda", "william", "elizabeth", "david", "barbara", "richard", "susan", "joseph", "jessica", "thomas", "sarah", "charles", "karen", "nancy", "lisa", "betty", "marit", "steven", "paul"]
+        last_names = ["smith", "jones", "taylor", "williams", "brown", "white", "harris", "martin", "davies", "wilson", "cooper", "evans", "king", "thomas", "baker", "green", "wright", "johnson", "edwards", "clark", "roberts", "robinson", "walker", "young", "allen", "king"]
+        f = random.choice(first_names)
+        l = random.choice(last_names)
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        return f"{f}.{l}{suffix}"
 
     def _connect(self):
         """建立并返回一个已认证的 IMAP 连接。"""
@@ -3911,14 +3915,19 @@ class CustomCatchallMailbox(BaseMailbox):
                 if status != "OK":
                     continue
 
-                # Gmail 支持 "TO" 关键字搜索
+                # 策略 1: 尝试直接按 TO 搜索 (Gmail 兼容不错)
                 search_criteria = f'(TO "{target_email}")'
                 status, data = conn.uid("SEARCH", None, search_criteria)
-                if status != "OK" or not data or not data[0]:
-                    continue
 
-                uid_list = data[0].split()
-                for uid in uid_list:
+                if status == "OK" and data and data[0]:
+                    uids = data[0].split()
+                else:
+                    # 策略 2: 如果 TO 搜索失败 (可能是因为转发头在 Delivered-To)，尝试按发件人搜 OpenAI 所有的
+                    search_criteria = '(FROM "openai.com")'
+                    status, data = conn.uid("SEARCH", None, search_criteria)
+                    uids = data[0].split() if (status == "OK" and data and data[0]) else []
+
+                for uid in uids:
                     uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
                     if uid_str and uid_str not in result_uids:
                         result_uids.append(uid_str)
