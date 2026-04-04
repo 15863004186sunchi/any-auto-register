@@ -3242,7 +3242,7 @@ class OutlookMailbox(BaseMailbox):
         try:
             self._imap_port = int(imap_port or 993)
         except (TypeError, ValueError):
-        self._imap_port = 993
+            self._imap_port = 993
         self._token_endpoint = str(token_endpoint or "").strip()
 
     def _acquire_pool_lock(self, timeout: float = 20.0):
