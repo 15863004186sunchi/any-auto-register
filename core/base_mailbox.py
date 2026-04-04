@@ -492,7 +492,7 @@ def create_mailbox(
         return CustomCatchallMailbox(
             domain=extra.get("catchall_domain", ""),
             imap_host=extra.get("catchall_imap_host", "imap.gmail.com"),
-            imap_port=int(extra.get("catchall_imap_port", 993)),
+            imap_port=int(extra.get("catchall_imap_port") or 993),
             imap_user=extra.get("catchall_imap_user", ""),
             imap_password=extra.get("catchall_imap_password", ""),
             imap_use_ssl=extra.get("catchall_imap_use_ssl", True),
