@@ -3936,25 +3936,30 @@ class CustomCatchallMailbox(BaseMailbox):
 
         return result_uids
 
-    def _fetch_message_text(self, conn, uid: str) -> tuple[str, str]:
+    def _fetch_message_text(self, conn, uid: str) -> dict:
         """
-        获取邮件的 Subject 和纯文本正文。
-        返回 (subject, body_text)
+        获取邮件的关键信息。
+        返回 {"subject": str, "body": str, "to": str, "delivered_to": str}
         """
         import email as email_lib
         import email.header as email_header
 
+        res = {"subject": "", "body": "", "to": "", "delivered_to": ""}
         try:
             status, data = conn.uid("FETCH", uid, "(RFC822)")
             if status != "OK" or not data:
-                return "", ""
+                return res
             raw_bytes = data[0][1] if isinstance(data[0], tuple) else data[0]
             if not raw_bytes:
-                return "", ""
+                return res
 
             msg = email_lib.message_from_bytes(
                 raw_bytes if isinstance(raw_bytes, bytes) else raw_bytes.encode()
             )
+
+            # 记录 To 和 Delivered-To
+            res["to"] = str(msg.get("To", "")).lower()
+            res["delivered_to"] = str(msg.get("Delivered-To", "")).lower()
 
             # 解码 Subject
             subject_raw = msg.get("Subject", "")
@@ -3965,6 +3970,7 @@ class CustomCatchallMailbox(BaseMailbox):
                     subject_text += part.decode(charset or "utf-8", errors="ignore")
                 else:
                     subject_text += str(part)
+            res["subject"] = subject_text
 
             # 提取正文
             body_parts = []
@@ -3989,9 +3995,10 @@ class CustomCatchallMailbox(BaseMailbox):
                     charset = msg.get_content_charset() or "utf-8"
                     body_parts.append(payload.decode(charset, errors="ignore"))
 
-            return subject_text, "\n".join(body_parts)
+            res["body"] = "\n".join(body_parts)
+            return res
         except Exception:
-            return "", ""
+            return res
 
     # ------------------------------------------------------------------
     # BaseMailbox interface
@@ -4037,6 +4044,7 @@ class CustomCatchallMailbox(BaseMailbox):
         self._log(f"[CatchAll] 开始轮询 {target_email} 的验证码 (timeout={timeout}s)")
 
         def poll_once() -> Optional[str]:
+            import re
             try:
                 conn = self._connect()
                 uids = self._fetch_message_uids(conn, target_email)
@@ -4044,8 +4052,15 @@ class CustomCatchallMailbox(BaseMailbox):
                     if uid in seen:
                         continue
                     seen.add(uid)
-                    subject, body = self._fetch_message_text(conn, uid)
-                    search_text = f"{subject} {body}".strip()
+                    msg_info = self._fetch_message_text(conn, uid)
+                    
+                    # 关键过滤：验证收件人是否匹配（针对 Catchall 场景）
+                    to_headers = (msg_info.get("to", "") + " " + msg_info.get("delivered_to", "")).lower()
+                    email_pattern = rf"\b{re.escape(target_email.lower())}\b"
+                    if not re.search(email_pattern, to_headers):
+                        continue
+
+                    search_text = f"{msg_info.get('subject', '')} {msg_info.get('body', '')}".strip()
                     if keyword and keyword.lower() not in search_text.lower():
                         continue
                     code = self._safe_extract(search_text, code_pattern)
