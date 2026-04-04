@@ -4028,6 +4028,25 @@ class CustomCatchallMailbox(BaseMailbox):
             self._log(f"[CatchAll] get_current_ids 失败: {e}")
             return set()
 
+    def get_verification_code(
+        self,
+        email: str = None,
+        timeout: int = 120,
+        otp_sent_at: float | None = None,
+        exclude_codes: set | list = None,
+        **kwargs,
+    ) -> str:
+        """适配 ChatGPT / OAuth 注册引擎的 get_verification_code 接口。"""
+        # 如果 account 尚未在 memory 中
+        account = MailboxAccount(email=email or "", account_id=email or "")
+        return self.wait_for_code(
+            account=account,
+            timeout=timeout,
+            otp_sent_at=otp_sent_at,
+            exclude_codes=exclude_codes,
+            **kwargs
+        )
+
     def wait_for_code(
         self,
         account: "MailboxAccount",
@@ -4091,9 +4110,13 @@ class CustomCatchallMailbox(BaseMailbox):
                 self._log(f"[CatchAll] 轮询 IMAP 失败: {e}")
             return None
 
-        return self._run_polling_wait(
-            timeout=timeout,
-            poll_interval=8,
-            poll_once=poll_once,
-            timeout_message=f"[CatchAll] 等待验证码超时 ({timeout}s)",
-        )
+        try:
+            return self._run_polling_wait(
+                timeout=timeout,
+                poll_interval=8,
+                poll_once=poll_once,
+                timeout_message=f"[CatchAll] 等待验证码超时 ({timeout}s)",
+            )
+        except TimeoutError:
+            self._log(f"[CatchAll] 在 {timeout}s 内未命中验证码，返回空以允许状态机重试/重发。")
+            return ""
