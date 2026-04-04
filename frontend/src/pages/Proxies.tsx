@@ -17,6 +17,7 @@ export default function Proxies() {
   const [region, setRegion] = useState('')
   const [checking, setChecking] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
 
   const load = async () => {
     setLoading(true)
@@ -64,6 +65,24 @@ export default function Proxies() {
 
   const toggle = async (id: number) => {
     await apiFetch(`/proxies/${id}/toggle`, { method: 'PATCH' })
+    load()
+  }
+
+  const clearAll = async () => {
+    if (proxies.length === 0) return
+    await apiFetch('/proxies/bulk/clear', { method: 'DELETE' })
+    message.success('已清空全部代理')
+    load()
+  }
+
+  const delSelected = async () => {
+    if (selectedRowKeys.length === 0) return
+    await apiFetch('/proxies/bulk/clear', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids: selectedRowKeys }),
+    })
+    message.success(`已删除 ${selectedRowKeys.length} 个代理`)
+    setSelectedRowKeys([])
     load()
   }
 
@@ -136,9 +155,23 @@ export default function Proxies() {
           <h1 style={{ fontSize: 24, fontWeight: 'bold', margin: 0 }}>代理管理</h1>
           <p style={{ color: '#7a8ba3', marginTop: 4 }}>共 {proxies.length} 个代理</p>
         </div>
-        <Button icon={<ReloadOutlined spin={checking} />} onClick={check} loading={checking}>
-          检测全部
-        </Button>
+        <Space>
+          {selectedRowKeys.length > 0 && (
+            <Popconfirm title={`确认删除选中的 ${selectedRowKeys.length} 个代理？`} onConfirm={delSelected}>
+              <Button danger icon={<DeleteOutlined />}>
+                删除选中
+              </Button>
+            </Popconfirm>
+          )}
+          <Popconfirm title="确认清空所有代理？" onConfirm={clearAll} okText="确定清空" cancelText="取消" okButtonProps={{ danger: true }}>
+            <Button danger type="dashed" icon={<DeleteOutlined />}>
+              清空全部
+            </Button>
+          </Popconfirm>
+          <Button icon={<ReloadOutlined spin={checking} />} onClick={check} loading={checking}>
+            检测全部
+          </Button>
+        </Space>
       </div>
 
       <Card title="添加代理（每行一个）">
@@ -171,6 +204,10 @@ export default function Proxies() {
           dataSource={proxies}
           loading={loading}
           pagination={false}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys),
+          }}
         />
       </Card>
     </div>

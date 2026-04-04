@@ -61,6 +61,18 @@ def delete_proxy(proxy_id: int, session: Session = Depends(get_session)):
     return {"ok": True}
 
 
+@router.delete("/bulk/clear")
+def bulk_delete_proxies(ids: Optional[list[int]] = None, session: Session = Depends(get_session)):
+    from sqlmodel import delete
+    if ids is None:
+        statement = delete(ProxyModel)
+    else:
+        statement = delete(ProxyModel).where(ProxyModel.id.in_(ids))
+    session.exec(statement)
+    session.commit()
+    return {"ok": True}
+
+
 @router.patch("/{proxy_id}/toggle")
 def toggle_proxy(proxy_id: int, session: Session = Depends(get_session)):
     p = session.get(ProxyModel, proxy_id)
