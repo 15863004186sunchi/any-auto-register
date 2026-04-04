@@ -3907,7 +3907,7 @@ class CustomCatchallMailbox(BaseMailbox):
         import imaplib
 
         result_uids: list[str] = []
-        folders = ["INBOX", "[Gmail]/Spam", "[Gmail]/All Mail"]
+        folders = ["INBOX", "[Gmail]/Spam", '[Gmail]/"All Mail"']
 
         for folder in folders:
             try:
@@ -3922,10 +3922,13 @@ class CustomCatchallMailbox(BaseMailbox):
                 if status == "OK" and data and data[0]:
                     uids = data[0].split()
                 else:
-                    # 策略 2: 如果 TO 搜索失败 (可能是因为转发头在 Delivered-To)，尝试按发件人搜 OpenAI 所有的
+                    # 策略 2: 如果 TO 搜索失败 (由于转发)，尝试搜索 OpenAI 的所有邮件
                     search_criteria = '(FROM "openai.com")'
                     status, data = conn.uid("SEARCH", None, search_criteria)
                     uids = data[0].split() if (status == "OK" and data and data[0]) else []
+
+                # CRITICAL: 必须从新到旧排序！IMAP SEARCH 返回的是升序
+                uids.reverse() 
 
                 for uid in uids:
                     uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
@@ -4048,7 +4051,10 @@ class CustomCatchallMailbox(BaseMailbox):
             try:
                 conn = self._connect()
                 uids = self._fetch_message_uids(conn, target_email)
-                for uid in uids:
+                # 限制检查数量，避免用户收件箱过大导致的超长遍历（最新 10 封 OpenAI 邮件基本够了）
+                check_uids = uids[:20] 
+                
+                for uid in check_uids:
                     if uid in seen:
                         continue
                     seen.add(uid)
@@ -4057,10 +4063,14 @@ class CustomCatchallMailbox(BaseMailbox):
                     # 关键过滤：验证收件人是否匹配（针对 Catchall 场景）
                     to_headers = (msg_info.get("to", "") + " " + msg_info.get("delivered_to", "")).lower()
                     email_pattern = rf"\b{re.escape(target_email.lower())}\b"
+                    
                     if not re.search(email_pattern, to_headers):
                         continue
 
-                    search_text = f"{msg_info.get('subject', '')} {msg_info.get('body', '')}".strip()
+                    subject = msg_info.get('subject', '')
+                    body = msg_info.get('body', '')
+                    search_text = f"{subject} {body}".strip()
+                    
                     if keyword and keyword.lower() not in search_text.lower():
                         continue
                     code = self._safe_extract(search_text, code_pattern)
