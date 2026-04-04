@@ -18,6 +18,10 @@ class ProxyBulkCreate(BaseModel):
     region: str = ""
 
 
+class ProxyBulkDelete(BaseModel):
+    ids: Optional[list[int]] = None
+
+
 @router.get("")
 def list_proxies(session: Session = Depends(get_session)):
     items = session.exec(select(ProxyModel)).all()
@@ -62,9 +66,10 @@ def delete_proxy(proxy_id: int, session: Session = Depends(get_session)):
 
 
 @router.delete("/bulk/clear")
-def bulk_delete_proxies(ids: Optional[list[int]] = None, session: Session = Depends(get_session)):
+def bulk_delete_proxies(body: ProxyBulkDelete = ProxyBulkDelete(), session: Session = Depends(get_session)):
     from sqlmodel import delete
-    if ids is None:
+    ids = body.ids
+    if not ids:
         statement = delete(ProxyModel)
     else:
         statement = delete(ProxyModel).where(ProxyModel.id.in_(ids))
