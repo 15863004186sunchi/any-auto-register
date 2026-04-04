@@ -3899,45 +3899,50 @@ class CustomCatchallMailbox(BaseMailbox):
         conn.login(self.imap_user, self.imap_password)
         return conn
 
-    def _fetch_message_uids(self, conn, target_email: str, since_uid: int = 0) -> list[str]:
+    def _fetch_message_uids(self, conn, target_email: str) -> list[tuple[str, str]]:
         """
-        在 INBOX 和 [Gmail]/Spam (垃圾邮件) 两个文件夹中，
-        按 To/Delivered-To 字段搜索发给 target_email 的邮件 UID 列表。
+        在多个文件夹中搜索。返回 [(folder, uid), ...]
         """
         import imaplib
 
-        result_uids: list[str] = []
-        folders = ["INBOX", "[Gmail]/Spam", '[Gmail]/"All Mail"']
+        result_list: list[tuple[str, str]] = []
+        # 常见文件夹名称
+        folders = ["INBOX", "[Gmail]/Spam", "Junk", "[Gmail]/Archive", "[Gmail]/&g0l6P4- (所有邮件)"]
+        
+        # 尝试动态获取所有文件夹列表 (针对非英文环境)
+        try:
+            status, folder_list = conn.list()
+            if status == "OK":
+                for f in folder_list:
+                    # 解析 f: '(\\HasNoChildren) "/" "INBOX"'
+                    parts = f.decode().split('"')
+                    if len(parts) >= 3:
+                        name = parts[-2]
+                        if name not in folders and "Trash" not in name and "Sent" not in name and "Drafts" not in name:
+                            folders.append(name)
+        except Exception:
+            pass
 
         for folder in folders:
             try:
-                status, _ = conn.select(folder, readonly=True)
+                status, _ = conn.select(f'"{folder}"', readonly=True)
                 if status != "OK":
                     continue
 
-                # 策略 1: 尝试直接按 TO 搜索 (Gmail 兼容不错)
-                search_criteria = f'(TO "{target_email}")'
+                # 搜索 OpenAI 的所有邮件，由新到旧
+                search_criteria = '(FROM "openai.com")'
                 status, data = conn.uid("SEARCH", None, search_criteria)
-
+                
                 if status == "OK" and data and data[0]:
                     uids = data[0].split()
-                else:
-                    # 策略 2: 如果 TO 搜索失败 (由于转发)，尝试搜索 OpenAI 的所有邮件
-                    search_criteria = '(FROM "openai.com")'
-                    status, data = conn.uid("SEARCH", None, search_criteria)
-                    uids = data[0].split() if (status == "OK" and data and data[0]) else []
-
-                # CRITICAL: 必须从新到旧排序！IMAP SEARCH 返回的是升序
-                uids.reverse() 
-
-                for uid in uids:
-                    uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
-                    if uid_str and uid_str not in result_uids:
-                        result_uids.append(uid_str)
+                    uids.reverse()
+                    for uid in uids[:50]: # 增加到 50 封，确保覆盖
+                        uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
+                        result_list.append((folder, uid_str))
             except Exception:
                 continue
 
-        return result_uids
+        return result_list
 
     def _fetch_message_text(self, conn, uid: str) -> dict:
         """
@@ -3960,9 +3965,18 @@ class CustomCatchallMailbox(BaseMailbox):
                 raw_bytes if isinstance(raw_bytes, bytes) else raw_bytes.encode()
             )
 
-            # 记录 To 和 Delivered-To
+            # 记录关键 Header 用于调试和过滤
             res["to"] = str(msg.get("To", "")).lower()
             res["delivered_to"] = str(msg.get("Delivered-To", "")).lower()
+            res["x_original_to"] = str(msg.get("X-Original-To", "")).lower()
+            res["x_forwarded_to"] = str(msg.get("X-Forwarded-To", "")).lower()
+            res["envelope_to"] = str(msg.get("X-Envelope-To", "")).lower()
+            
+            # 把所有 header 合并用于模糊匹配
+            all_headers = []
+            for k, v in msg.items():
+                all_headers.append(f"{k}: {v}")
+            res["all_headers"] = "\n".join(all_headers).lower()
 
             # 解码 Subject
             subject_raw = msg.get("Subject", "")
@@ -4015,15 +4029,15 @@ class CustomCatchallMailbox(BaseMailbox):
         return MailboxAccount(email=email_addr, account_id=email_addr)
 
     def get_current_ids(self, account: "MailboxAccount") -> set:
-        """返回当前收件箱中所有发给该地址的邮件 UID 集合，用于过滤旧邮件。"""
+        """返回当前收件箱中所有发给该地址的邮件 UID 集合 (格式 folder:uid)。"""
         try:
             conn = self._connect()
-            uids = self._fetch_message_uids(conn, account.email)
+            folder_uids = self._fetch_message_uids(conn, account.email)
             try:
                 conn.logout()
             except Exception:
                 pass
-            return set(uids)
+            return set(f"{f}:{u}" for f, u in folder_uids)
         except Exception as e:
             self._log(f"[CatchAll] get_current_ids 失败: {e}")
             return set()
@@ -4056,35 +4070,38 @@ class CustomCatchallMailbox(BaseMailbox):
         code_pattern: str = None,
         **kwargs,
     ) -> str:
+        # seen 使用 folder:uid 格式防止跨文件夹冲突
         seen = set(str(uid) for uid in (before_ids or set()))
         exclude_codes = {
             str(code).strip()
             for code in (kwargs.get("exclude_codes") or set())
             if str(code or "").strip()
         }
-        target_email = account.email
+        target_email = account.email.lower()
         self._log(f"[CatchAll] 开始轮询 {target_email} 的验证码 (timeout={timeout}s)")
 
         def poll_once() -> Optional[str]:
             import re
             try:
                 conn = self._connect()
-                uids = self._fetch_message_uids(conn, target_email)
-                # 限制检查数量，避免用户收件箱过大导致的超长遍历（最新 10 封 OpenAI 邮件基本够了）
-                check_uids = uids[:20] 
+                folder_uids = self._fetch_message_uids(conn, target_email)
                 
-                for uid in check_uids:
-                    if uid in seen:
+                for folder, uid in folder_uids:
+                    seen_key = f"{folder}:{uid}"
+                    if seen_key in seen:
                         continue
-                    seen.add(uid)
+                    seen.add(seen_key)
+                    
                     msg_info = self._fetch_message_text(conn, uid)
                     
-                    # 关键过滤：验证收件人是否匹配（针对 Catchall 场景）
-                    to_headers = (msg_info.get("to", "") + " " + msg_info.get("delivered_to", "")).lower()
-                    email_pattern = rf"\b{re.escape(target_email.lower())}\b"
-                    
-                    if not re.search(email_pattern, to_headers):
+                    # 关键过滤：验证收件人是否匹配
+                    headers_text = msg_info.get("all_headers", "")
+                    # 只要任何 header 包含目标邮箱即可
+                    if target_email not in headers_text:
                         continue
+
+                    # 额外的调试日志
+                    self._log(f"[CatchAll] 发现匹配邮件: folder={folder}, uid={uid}, Subject={msg_info.get('subject')}")
 
                     subject = msg_info.get('subject', '')
                     body = msg_info.get('body', '')
