@@ -32,6 +32,7 @@ def get_sentinel_token_via_browser(
     page_url: Optional[str] = None,
     headless: bool = True,
     device_id: Optional[str] = None,
+    user_agent: Optional[str] = None,
     log_fn: Optional[Callable[[str], None]] = None,
 ) -> Optional[str]:
     """通过浏览器直接调用 SentinelSDK.token(flow) 获取完整 token。"""
@@ -66,13 +67,14 @@ def get_sentinel_token_via_browser(
     with sync_playwright() as p:
         browser = p.chromium.launch(**launch_args)
         try:
+            actual_ua = user_agent or (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/136.0.7103.92 Safari/537.36"
+            )
             context = browser.new_context(
                 viewport={"width": 1440, "height": 900},
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/136.0.7103.92 Safari/537.36"
-                ),
+                user_agent=actual_ua,
                 ignore_https_errors=True,
             )
             if device_id:

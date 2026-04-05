@@ -76,9 +76,8 @@ class OAuthClient:
             self._log(self.last_error)
 
     def _browser_pause(self, low=0.15, high=0.4):
-        """在 headed 模式下注入轻微延迟，模拟真实浏览器操作节奏。"""
-        if self.browser_mode == "headed":
-            random_delay(low, high)
+        """注入轻微延迟，模拟真实浏览器操作节奏。"""
+        random_delay(low, high)
 
     @staticmethod
     def _random_chrome_fingerprint():
@@ -715,6 +714,7 @@ class OAuthClient:
                 page_url=current_referer or f"{self.oauth_issuer}/log-in",
                 headless=self.browser_mode != "headed",
                 device_id=device_id,
+                user_agent=user_agent,
                 log_fn=lambda msg: self._log(f"authorize_continue: {msg}"),
             )
             if sentinel_token:
@@ -869,6 +869,7 @@ class OAuthClient:
                 page_url=referer or f"{self.oauth_issuer}/log-in/password",
                 headless=self.browser_mode != "headed",
                 device_id=device_id,
+                user_agent=user_agent,
                 log_fn=lambda msg: self._log(f"password_verify: {msg}"),
             )
             if sentinel_pwd:
@@ -2361,6 +2362,7 @@ class OAuthClient:
             or f"{self.oauth_issuer}/email-verification",
             headless=self.browser_mode != "headed",
             device_id=device_id,
+            user_agent=user_agent,
             log_fn=lambda msg: self._log(f"email_otp_validate: {msg}"),
         )
         if sentinel_otp:

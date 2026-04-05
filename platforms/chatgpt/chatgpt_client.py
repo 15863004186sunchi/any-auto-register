@@ -143,6 +143,7 @@ class ChatGPTClient:
                 page_url=page_url,
                 headless=self.browser_mode != "headed",
                 device_id=self.device_id,
+                user_agent=self.ua,
                 log_fn=lambda msg: self._log(msg),
             )
             if token:

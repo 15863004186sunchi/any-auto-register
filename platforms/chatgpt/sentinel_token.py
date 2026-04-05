@@ -90,13 +90,22 @@ class SentinelTokenGenerator:
           [17] navigator.hardwareConcurrency
           [18] performance.timeOrigin
         """
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
 
         screen_info = "1920x1080"
-        now = datetime.now(timezone.utc)
-        date_str = now.strftime(
-            "%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)"
-        )
+        tz_offset_hours = int(self.timezone_offset or 0)
+        tz = timezone(timedelta(hours=tz_offset_hours))
+        now = datetime.now(tz)
+        sign = "+" if tz_offset_hours >= 0 else "-"
+        abs_hours = abs(tz_offset_hours)
+        tz_name_map = {
+            -8: "Pacific Standard Time", -7: "Mountain Standard Time",
+            -6: "Central Standard Time", -5: "Eastern Standard Time",
+            0: "Coordinated Universal Time", 1: "Central European Time",
+            8: "China Standard Time", 9: "Japan Standard Time",
+        }
+        tz_name = tz_name_map.get(tz_offset_hours, f"UTC{sign}{abs_hours}")
+        date_str = now.strftime(f"%a %b %d %Y %H:%M:%S GMT{sign}{abs_hours:02d}00 ({tz_name})")
         js_heap_limit = 4294705152
         nav_random1 = random.random()
         ua = self.user_agent

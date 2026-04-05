@@ -409,6 +409,7 @@ class RefreshTokenRegistrationEngine:
                 self._log("3. 新开 OAuth session，严格复刻 login_and_get_tokens 登录链路")
                 self._log("4. 本轮仅共享邮箱+密码，其它会话数据全新")
                 self._log("5. 登录成功后提交 about_you，并继续 workspace/token 流程")
+                oauth_client._recreate_session()  # 清空 cookie 容器，保留 device_id
                 tokens = oauth_client.login_and_get_tokens(
                     result.email,
                     self.password,
@@ -419,7 +420,7 @@ class RefreshTokenRegistrationEngine:
                     skymail_client=email_adapter,
                     prefer_passwordless_login=False,
                     allow_phone_verification=False,
-                    force_new_browser=True,
+                    force_new_browser=False,
                     force_chatgpt_entry=False,
                     screen_hint="login",
                     force_password_login=True,
@@ -440,6 +441,7 @@ class RefreshTokenRegistrationEngine:
                 oauth_screen_hint = "login"
                 oauth_force_password_login = False
                 oauth_force_chatgpt_entry = False
+                oauth_client._recreate_session()  # 清空 cookie 容器，保留 device_id
                 tokens = oauth_client.login_and_get_tokens(
                     result.email,
                     self.password,
@@ -450,7 +452,7 @@ class RefreshTokenRegistrationEngine:
                     skymail_client=email_adapter,
                     prefer_passwordless_login=not oauth_force_password_login,
                     allow_phone_verification=False,
-                    force_new_browser=True,
+                    force_new_browser=False,
                     force_chatgpt_entry=oauth_force_chatgpt_entry,
                     screen_hint=oauth_screen_hint,
                     force_password_login=oauth_force_password_login,
