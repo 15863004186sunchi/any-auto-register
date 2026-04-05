@@ -86,7 +86,11 @@ export default function Proxies() {
     load()
   }
 
-  const sync = async (url?: string) => {
+  const sync = async () => {
+    let url = undefined
+    if (newProxy.trim().startsWith('http')) {
+      url = newProxy.trim()
+    }
     setLoading(true)
     try {
       const res = await apiFetch('/proxies/sync', {
@@ -209,7 +213,7 @@ export default function Proxies() {
             <Button type="primary" icon={<PlusOutlined />} onClick={add}>
               添加
             </Button>
-            <Button icon={<ReloadOutlined />} onClick={() => sync()}>
+            <Button icon={<ReloadOutlined />} onClick={sync}>
               从 URL 同步
             </Button>
             <span style={{ color: '#7a8ba3', fontSize: 12 }}>
