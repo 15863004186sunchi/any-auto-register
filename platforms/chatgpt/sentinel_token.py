@@ -226,7 +226,13 @@ class SentinelTokenGenerator:
         config[9] = round(random.uniform(5, 50))
         return "gAAAAAC" + self._base64_encode(config)
 
-
+def fetch_sentinel_challenge(
+    session,
+    device_id,
+    flow="authorize_continue",
+    user_agent=None,
+    sec_ch_ua=None,
+    impersonate=None,
     request_p=None,
     language="en-US",
     timezone_offset=0,
@@ -269,6 +275,11 @@ class SentinelTokenGenerator:
     return None
 
 
+def _build_sentinel_token_python(
+    session,
+    device_id,
+    *,
+    flow="authorize_continue",
     user_agent=None,
     sec_ch_ua=None,
     impersonate=None,
@@ -313,6 +324,10 @@ class SentinelTokenGenerator:
     )
 
 
+def build_sentinel_token(
+    session,
+    device_id,
+    flow="authorize_continue",
     user_agent=None,
     sec_ch_ua=None,
     impersonate=None,
@@ -351,4 +366,3 @@ def build_sentinel_token_vm_only(
         sec_ch_ua=sec_ch_ua,
         impersonate=impersonate,
     )
-
