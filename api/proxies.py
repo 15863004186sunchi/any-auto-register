@@ -120,6 +120,8 @@ def sync_proxies(body: ProxySyncRequest, session: Session = Depends(get_session)
         raise HTTPException(500, f"无法从 URL 获取列表: {e}")
     
     lines = [l.strip() for l in content.splitlines() if l.strip()]
+    if len(lines) > 1000:
+        lines = lines[:1000]
     added = 0
     for line in lines:
         if line.startswith("#"): continue

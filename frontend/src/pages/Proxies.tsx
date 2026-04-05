@@ -229,7 +229,7 @@ export default function Proxies() {
           columns={columns}
           dataSource={proxies}
           loading={loading}
-          pagination={false}
+          pagination={{ pageSize: 20 }}
           rowSelection={{
             selectedRowKeys,
             onChange: (keys) => setSelectedRowKeys(keys),
