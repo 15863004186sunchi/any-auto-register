@@ -96,6 +96,9 @@ class ChatGPTClient:
                 "en-US,en;q=0.8",
             ]
         )
+        self.language = self.accept_language.split(",")[0]
+        # 随机时区偏移 (-8 to +8)
+        self.timezone_offset = random.randint(-8, -4) if "US" in self.accept_language else random.randint(0, 8) 
 
         # 随机 Chrome 版本
         (
@@ -153,6 +156,8 @@ class ChatGPTClient:
             user_agent=self.ua,
             sec_ch_ua=self.sec_ch_ua,
             impersonate=self.impersonate,
+            language=self.language,
+            timezone_offset=self.timezone_offset,
         )
         if token:
             self._log(f"{flow}: 已通过 HTTP PoW 获取 token")
@@ -163,10 +168,18 @@ class ChatGPTClient:
         if self.verbose:
             print(f"  {msg}")
 
-    def _browser_pause(self, low=0.15, high=0.45):
-        """在 headed 模式下加入轻微停顿，模拟有头浏览器节奏。"""
-        if self.browser_mode == "headed":
-            random_delay(low, high)
+    def _browser_pause(self, low=0.2, high=0.6):
+        """模拟浏览器中的轻微停顿。"""
+        random_delay(low, high)
+
+    def _simulate_human_typing(self, text_length=None):
+        """模拟人类输入资料的耗时。"""
+        # 平均每个字符 0.1s - 0.2s，加上思考时间
+        delay = random.uniform(1.5, 3.5)
+        if text_length:
+            delay += text_length * random.uniform(0.05, 0.15)
+        self._log(f"模拟人类输入行为 (等待 {delay:.1f}s)...")
+        time.sleep(delay)
 
     def _headers(
         self,
@@ -636,6 +649,9 @@ class ChatGPTClient:
         headers.update(generate_datadog_trace())
         headers["oai-device-id"] = self.device_id
 
+        # 模拟人类录入密码的时间
+        self._simulate_human_typing(len(password))
+
         sentinel_token = self._get_sentinel_token(
             "username_password_create",
             page_url=f"{self.AUTH}/create-account/password",
@@ -794,6 +810,9 @@ class ChatGPTClient:
         if sentinel_token:
             headers["openai-sentinel-token"] = sentinel_token
         headers.update(generate_datadog_trace())
+
+        # 模拟人类录入姓名和生日的时间
+        self._simulate_human_typing(len(name) + len(birthdate))
 
         payload = {
             "name": name,

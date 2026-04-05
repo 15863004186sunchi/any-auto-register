@@ -25,13 +25,15 @@ class SentinelTokenGenerator:
     MAX_ATTEMPTS = 500000
     ERROR_PREFIX = "wQ8Lk5FbGpA2NcR9dShT6gYjU7VxZ4D"
 
-    def __init__(self, device_id=None, user_agent=None):
+    def __init__(self, device_id=None, user_agent=None, language="en-US", timezone_offset=0):
         self.device_id = device_id or str(uuid.uuid4())
         self.user_agent = user_agent or (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/145.0.0.0 Safari/537.36"
+            "Chrome/133.0.0.0 Safari/537.36"
         )
+        self.language = language or "en-US"
+        self.timezone_offset = timezone_offset # In hours, e.g. -7
         self.requirements_seed = str(random.random())
         self.sid = str(uuid.uuid4())
 
@@ -225,16 +227,16 @@ class SentinelTokenGenerator:
         return "gAAAAAC" + self._base64_encode(config)
 
 
-def fetch_sentinel_challenge(
-    session,
-    device_id,
-    flow="authorize_continue",
-    user_agent=None,
-    sec_ch_ua=None,
-    impersonate=None,
     request_p=None,
+    language="en-US",
+    timezone_offset=0,
 ):
-    generator = SentinelTokenGenerator(device_id=device_id, user_agent=user_agent)
+    generator = SentinelTokenGenerator(
+        device_id=device_id, 
+        user_agent=user_agent,
+        language=language,
+        timezone_offset=timezone_offset,
+    )
     req_body = {
         "p": str(request_p or "").strip() or generator.generate_requirements_token(),
         "id": device_id,
@@ -267,14 +269,11 @@ def fetch_sentinel_challenge(
     return None
 
 
-def _build_sentinel_token_python(
-    session,
-    device_id,
-    *,
-    flow="authorize_continue",
     user_agent=None,
     sec_ch_ua=None,
     impersonate=None,
+    language="en-US",
+    timezone_offset=0,
 ):
     challenge = fetch_sentinel_challenge(
         session,
@@ -283,6 +282,8 @@ def _build_sentinel_token_python(
         user_agent=user_agent,
         sec_ch_ua=sec_ch_ua,
         impersonate=impersonate,
+        language=language,
+        timezone_offset=timezone_offset,
     )
     if not challenge:
         return None
@@ -312,13 +313,11 @@ def _build_sentinel_token_python(
     )
 
 
-def build_sentinel_token(
-    session,
-    device_id,
-    flow="authorize_continue",
     user_agent=None,
     sec_ch_ua=None,
     impersonate=None,
+    language="en-US",
+    timezone_offset=0,
 ):
     """默认 Sentinel token 构造：纯 Python。"""
     return _build_sentinel_token_python(
@@ -328,6 +327,8 @@ def build_sentinel_token(
         user_agent=user_agent,
         sec_ch_ua=sec_ch_ua,
         impersonate=impersonate,
+        language=language,
+        timezone_offset=timezone_offset,
     )
 
 
