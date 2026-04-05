@@ -22,6 +22,11 @@ class ProxyBulkDelete(BaseModel):
     ids: Optional[list[int]] = None
 
 
+class ProxySyncRequest(BaseModel):
+    url: Optional[str] = None
+    region: str = ""
+
+
 @router.get("")
 def list_proxies(session: Session = Depends(get_session)):
     items = session.exec(select(ProxyModel)).all()
@@ -93,3 +98,52 @@ def toggle_proxy(proxy_id: int, session: Session = Depends(get_session)):
 def check_proxies(background_tasks: BackgroundTasks):
     background_tasks.add_task(proxy_pool.check_all)
     return {"message": "检测任务已启动"}
+
+
+@router.post("/sync")
+def sync_proxies(body: ProxySyncRequest, session: Session = Depends(get_session)):
+    import requests
+    from core.config_store import config_store
+    
+    url = (body.url or config_store.get("proxy_sync_url", "")).strip()
+    if not url:
+        raise HTTPException(400, "未配置同步 URL，请在设置中保存或直接请求时提供")
+    
+    if not url.startswith("http"):
+        raise HTTPException(400, "无效的同步 URL")
+
+    try:
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        content = r.text
+    except Exception as e:
+        raise HTTPException(500, f"无法从 URL 获取列表: {e}")
+    
+    lines = [l.strip() for l in content.splitlines() if l.strip()]
+    added = 0
+    for line in lines:
+        if line.startswith("#"): continue
+        
+        # 尝试格式解析: host:port:user:pass 或 host:port 或 user:pass@host:port
+        proxy_url = line
+        if "://" not in line:
+            parts = line.split(":")
+            if len(parts) == 4:
+                # Webshare 常见格式 host:port:user:pass
+                h, p, u, pw = parts
+                proxy_url = f"http://{u}:{pw}@{h}:{p}"
+            elif len(parts) == 2:
+                # host:port
+                h, p = parts
+                proxy_url = f"http://{h}:{p}"
+            # 如果已经是 user:pass@host:port 但没有 http://
+            elif "@" in line:
+                proxy_url = f"http://{line}"
+        
+        existing = session.exec(select(ProxyModel).where(ProxyModel.url == proxy_url)).first()
+        if not existing:
+            session.add(ProxyModel(url=proxy_url, region=body.region))
+            added += 1
+            
+    session.commit()
+    return {"added": added, "total": len(lines)}

@@ -86,6 +86,22 @@ export default function Proxies() {
     load()
   }
 
+  const sync = async (url?: string) => {
+    setLoading(true)
+    try {
+      const res = await apiFetch('/proxies/sync', {
+        method: 'POST',
+        body: JSON.stringify({ url, region }),
+      })
+      message.success(`同步完成：新增 ${res.added} 个，总计 ${res.total} 个`)
+      load()
+    } catch (e: any) {
+      message.error(`同步失败: ${e.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const check = async () => {
     setChecking(true)
     await apiFetch('/proxies/check', { method: 'POST' })
@@ -193,6 +209,12 @@ export default function Proxies() {
             <Button type="primary" icon={<PlusOutlined />} onClick={add}>
               添加
             </Button>
+            <Button icon={<ReloadOutlined />} onClick={() => sync()}>
+              从 URL 同步
+            </Button>
+            <span style={{ color: '#7a8ba3', fontSize: 12 }}>
+              优先使用设置中的 proxy_sync_url
+            </span>
           </Space>
         </Space>
       </Card>

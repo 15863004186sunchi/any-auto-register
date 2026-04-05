@@ -70,6 +70,13 @@ const TAB_ITEMS = [
         desc: '控制注册任务如何执行',
         fields: [{ key: 'default_executor', label: '执行器类型', type: 'select' }],
       },
+      {
+        title: '代理同步',
+        desc: '从外部 URL 自动同步代理列表（支持 Webshare 等订阅链接）',
+        fields: [
+          { key: 'proxy_sync_url', label: '代理同步 URL', placeholder: 'https://...', secret: true },
+        ],
+      },
     ],
   },
   {
@@ -440,7 +447,7 @@ function parseStoredDomainList(value: unknown): string[] {
     if (Array.isArray(parsed)) {
       return normalizeDomainList(parsed)
     }
-  } catch {}
+  } catch { }
 
   return normalizeDomainList(
     text
@@ -1102,7 +1109,7 @@ function SecurityPanel() {
     try {
       const s = await apiFetch('/auth/status')
       setStatus(s)
-    } catch {}
+    } catch { }
   }
 
   useEffect(() => { loadStatus() }, [])

@@ -96,6 +96,7 @@ CONFIG_KEYS = [
     "catchall_imap_port",
     "catchall_imap_user",
     "catchall_imap_password",
+    "proxy_sync_url",
 ]
 
 
