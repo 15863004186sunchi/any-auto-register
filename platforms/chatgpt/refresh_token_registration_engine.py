@@ -412,10 +412,10 @@ class RefreshTokenRegistrationEngine:
                 tokens = oauth_client.login_and_get_tokens(
                     result.email,
                     self.password,
-                    device_id="",
-                    user_agent=None,
-                    sec_ch_ua=None,
-                    impersonate=None,
+                    device_id=getattr(register_client, "device_id", ""),
+                    user_agent=getattr(register_client, "ua", None),
+                    sec_ch_ua=getattr(register_client, "sec_ch_ua", None),
+                    impersonate=getattr(register_client, "impersonate", None),
                     skymail_client=email_adapter,
                     prefer_passwordless_login=False,
                     allow_phone_verification=False,
@@ -443,7 +443,7 @@ class RefreshTokenRegistrationEngine:
                 tokens = oauth_client.login_and_get_tokens(
                     result.email,
                     self.password,
-                    device_id="",
+                    device_id=getattr(register_client, "device_id", ""),
                     user_agent=getattr(register_client, "ua", None),
                     sec_ch_ua=getattr(register_client, "sec_ch_ua", None),
                     impersonate=getattr(register_client, "impersonate", None),
