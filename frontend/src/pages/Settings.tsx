@@ -1023,9 +1023,10 @@ function IntegrationsPanel() {
 }
 
 function OutlookImportSection() {
-  const { message: msg } = App.useApp()
+  const { message: msg, modal } = App.useApp()
   const [value, setValue] = useState('')
   const [loading, setLoading] = useState(false)
+  const [clearing, setClearing] = useState(false)
   const [result, setResult] = useState<any | null>(null)
 
   const handleSubmit = async () => {
@@ -1050,6 +1051,28 @@ function OutlookImportSection() {
     }
   }
 
+  const handleClear = async () => {
+    modal.confirm({
+      title: '确认清空账号池？',
+      content: '此操作将删除数据库中所有已导入的 Outlook/Hotmail 账号，不可恢复。',
+      okText: '确认清空',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        setClearing(true)
+        try {
+          await apiFetch('/outlook/clear', { method: 'POST' })
+          msg.success('账号池已清空')
+          setResult(null)
+        } catch (e: any) {
+          msg.error(e?.message || '清空失败')
+        } finally {
+          setClearing(false)
+        }
+      },
+    })
+  }
+
   return (
     <Card
       title="Outlook 批量导入"
@@ -1062,12 +1085,17 @@ function OutlookImportSection() {
         placeholder={`example@outlook.com----password\nexample@outlook.com----password----client_id----refresh_token`}
         autoSize={{ minRows: 6, maxRows: 14 }}
       />
-      <Space style={{ marginTop: 12 }}>
-        <Button type="primary" loading={loading} onClick={handleSubmit}>
-          导入
-        </Button>
-        <Button onClick={() => { setValue(''); setResult(null) }}>
-          清空
+      <Space style={{ marginTop: 12, width: '100%', justifyContent: 'space-between' }}>
+        <Space>
+          <Button type="primary" loading={loading} onClick={handleSubmit}>
+            导入
+          </Button>
+          <Button onClick={() => { setValue(''); setResult(null) }}>
+            重置输入框
+          </Button>
+        </Space>
+        <Button danger loading={clearing} onClick={handleClear}>
+          清空数据库账号池
         </Button>
       </Space>
       {result ? (
@@ -1089,6 +1117,7 @@ function OutlookImportSection() {
     </Card>
   )
 }
+
 
 type TotpSetupState = 'idle' | 'setup'
 

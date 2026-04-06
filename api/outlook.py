@@ -109,3 +109,22 @@ def batch_import_outlook(request: OutlookBatchImportRequest):
         errors=errors,
     )
 
+
+@router.post("/clear")
+def clear_outlook_accounts():
+    """
+    清空所有已导入的 Outlook 账号
+    """
+    from sqlmodel import delete
+    with Session(engine) as session:
+        try:
+            # 执行删除所有记录的操作
+            statement = delete(OutlookAccountModel)
+            session.exec(statement)
+            session.commit()
+            return {"success": True, "message": "账号池已清空"}
+        except Exception as e:
+            session.rollback()
+            return {"success": False, "message": f"清空失败: {str(e)}"}
+
+
