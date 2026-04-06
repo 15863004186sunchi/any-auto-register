@@ -1,0 +1,40 @@
+{
+  "mailbox": {
+    "provider": "hotmailapi",
+    "hotmailapi_api_url": "https://yourdomain.com",
+    "hotmailapi_pool_dir": "mail",
+    "hotmailapi_mailbox": "INBOX"
+  },
+  "proxy": null,
+  "注释": {
+    "说明": "HotmailAPI 邮箱服务配置示例",
+    "provider": "邮箱服务类型，固定为 hotmailapi",
+    "hotmailapi_api_url": "你的 API 服务地址",
+    "hotmailapi_pool_dir": "账号文件所在目录，默认为 mail",
+    "hotmailapi_pool_file": "可选，指定账号文件完整路径",
+    "hotmailapi_mailbox": "邮箱文件夹，默认为 INBOX",
+    "proxy": "可选，代理地址，如 http://127.0.0.1:7890"
+  },
+  "示例配置1_使用目录": {
+    "mailbox": {
+      "provider": "hotmailapi",
+      "hotmailapi_api_url": "https://api.example.com",
+      "hotmailapi_pool_dir": "mail"
+    }
+  },
+  "示例配置2_指定文件": {
+    "mailbox": {
+      "provider": "hotmailapi",
+      "hotmailapi_api_url": "https://api.example.com",
+      "hotmailapi_pool_file": "mail/my_accounts.txt"
+    }
+  },
+  "示例配置3_使用代理": {
+    "mailbox": {
+      "provider": "hotmailapi",
+      "hotmailapi_api_url": "https://api.example.com",
+      "hotmailapi_pool_dir": "mail"
+    },
+    "proxy": "http://127.0.0.1:7890"
+  }
+}

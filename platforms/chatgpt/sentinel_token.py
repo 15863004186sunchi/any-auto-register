@@ -312,7 +312,12 @@ def _build_sentinel_token_python(
     if not c_value:
         return None
 
-    generator = SentinelTokenGenerator(device_id=device_id, user_agent=user_agent)
+    generator = SentinelTokenGenerator(
+        device_id=device_id,
+        user_agent=user_agent,
+        language=language,
+        timezone_offset=timezone_offset,
+    )
     pow_data = challenge.get("proofofwork") or {}
     if pow_data.get("required") and pow_data.get("seed"):
         p_value = generator.generate_token(

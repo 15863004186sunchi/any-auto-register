@@ -488,6 +488,14 @@ def create_mailbox(
             token_endpoint=extra.get("outlook_token_endpoint", ""),
             proxy=proxy,
         )
+    elif provider == "hotmailapi":
+        return HotmailAPIMailbox(
+            api_url=extra.get("hotmailapi_api_url", ""),
+            pool_file=extra.get("hotmailapi_pool_file", ""),
+            pool_dir=extra.get("hotmailapi_pool_dir", "mail"),
+            mailbox=extra.get("hotmailapi_mailbox", "INBOX"),
+            proxy=proxy,
+        )
     elif provider == "custom_catchall":
         return CustomCatchallMailbox(
             domain=extra.get("catchall_domain", ""),
@@ -4137,3 +4145,358 @@ class CustomCatchallMailbox(BaseMailbox):
         except TimeoutError:
             self._log(f"[CatchAll] 在 {timeout}s 内未命中验证码，返回空以允许状态机重试/重发。")
             return ""
+
+
+
+class HotmailAPIMailbox(BaseMailbox):
+    """
+    基于第三方 Hotmail API 的邮箱服务
+    支持从本地文件导入邮箱账号池，格式：email----password----client_id----refresh_token
+    """
+
+    _pool_lock = threading.Lock()
+    _pool_cache: dict[str, list[dict]] = {}
+    _pool_index: dict[str, int] = {}
+
+    def __init__(
+        self,
+        api_url: str = "",
+        pool_file: str = "",
+        pool_dir: str = "mail",
+        mailbox: str = "INBOX",
+        proxy: str = None,
+    ):
+        self.api = (api_url or "").rstrip("/")
+        self.pool_file = str(pool_file or "").strip()
+        self.pool_dir = str(pool_dir or "mail").strip() or "mail"
+        self.mailbox = str(mailbox or "INBOX").strip() or "INBOX"
+        self.proxy = build_requests_proxy_config(proxy)
+        self._email = None
+        self._selected_record = None
+
+    def _load_pool_file(self, pool_path: str) -> list[dict]:
+        """
+        从文件加载邮箱池
+        格式：email----password----client_id----refresh_token
+        """
+        import os
+        from pathlib import Path
+
+        if not os.path.exists(pool_path):
+            raise RuntimeError(f"HotmailAPI 邮箱池文件不存在: {pool_path}")
+
+        records = []
+        with open(pool_path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                parts = line.split("----")
+                if len(parts) < 4:
+                    self._log(
+                        f"[HotmailAPI] 跳过格式错误的行 {line_num}: {line[:50]}"
+                    )
+                    continue
+
+                email = parts[0].strip()
+                password = parts[1].strip()
+                client_id = parts[2].strip()
+                refresh_token = parts[3].strip()
+
+                if not email or not client_id or not refresh_token:
+                    self._log(
+                        f"[HotmailAPI] 跳过不完整的记录 {line_num}: {email}"
+                    )
+                    continue
+
+                records.append(
+                    {
+                        "email": email,
+                        "password": password,
+                        "client_id": client_id,
+                        "refresh_token": refresh_token,
+                    }
+                )
+
+        if not records:
+            raise RuntimeError(f"HotmailAPI 邮箱池文件为空或格式错误: {pool_path}")
+
+        return records
+
+    def _get_pool_path(self) -> str:
+        """获取邮箱池文件路径"""
+        import os
+        from pathlib import Path
+
+        if self.pool_file:
+            return self.pool_file
+
+        # 从 pool_dir 目录中查找 .txt 文件
+        pool_dir_path = Path(self.pool_dir)
+        if not pool_dir_path.exists():
+            raise RuntimeError(f"HotmailAPI 邮箱池目录不存在: {self.pool_dir}")
+
+        txt_files = list(pool_dir_path.glob("*.txt"))
+        if not txt_files:
+            raise RuntimeError(f"HotmailAPI 邮箱池目录中没有 .txt 文件: {self.pool_dir}")
+
+        # 使用第一个找到的文件
+        return str(txt_files[0])
+
+    def _take_next_record(self) -> tuple[str, dict]:
+        """从池中轮转获取下一个邮箱记录"""
+        pool_path = self._get_pool_path()
+
+        with HotmailAPIMailbox._pool_lock:
+            # 加载或获取缓存的池
+            if pool_path not in HotmailAPIMailbox._pool_cache:
+                HotmailAPIMailbox._pool_cache[pool_path] = self._load_pool_file(
+                    pool_path
+                )
+                HotmailAPIMailbox._pool_index[pool_path] = 0
+
+            pool = HotmailAPIMailbox._pool_cache[pool_path]
+            if not pool:
+                raise RuntimeError(f"HotmailAPI 邮箱池为空: {pool_path}")
+
+            # 轮转获取
+            index = HotmailAPIMailbox._pool_index[pool_path]
+            record = pool[index]
+            HotmailAPIMailbox._pool_index[pool_path] = (index + 1) % len(pool)
+
+            return pool_path, record
+
+    def _headers(self) -> dict[str, str]:
+        return {"accept": "application/json"}
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict = None,
+        timeout: int = 15,
+    ) -> Any:
+        import requests
+
+        if not self.api:
+            raise RuntimeError("HotmailAPI 未配置 API URL")
+
+        url = f"{self.api}{path}"
+        response = requests.request(
+            method,
+            url,
+            params=params,
+            headers=self._headers(),
+            proxies=self.proxy,
+            timeout=timeout,
+        )
+
+        try:
+            data = response.json()
+        except Exception as exc:
+            preview = (response.text or "")[:200]
+            raise RuntimeError(
+                f"HotmailAPI {path} 返回非 JSON: HTTP {response.status_code} {preview}"
+            ) from exc
+
+        if response.status_code >= 400:
+            message = data if isinstance(data, str) else str(data)
+            raise RuntimeError(
+                f"HotmailAPI {path} 失败: HTTP {response.status_code} {message}"
+            )
+
+        return data
+
+    def _list_new_messages(
+        self, refresh_token: str, client_id: str, email: str
+    ) -> list[dict]:
+        """
+        调用 /api/mail-new 获取新邮件
+        """
+        params = {
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "email": email,
+            "mailbox": self.mailbox,
+            "response_type": "json",
+        }
+
+        try:
+            data = self._request_json("GET", "/api/mail-new", params=params, timeout=15)
+        except Exception as e:
+            self._log(f"[HotmailAPI] 获取新邮件失败: {e}")
+            return []
+
+        # 解析响应数据
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict):
+            # 尝试从常见的键中提取邮件列表
+            for key in ("data", "messages", "mails", "emails", "items", "list"):
+                if key in data and isinstance(data[key], list):
+                    return data[key]
+            # 如果响应本身就是一个邮件对象
+            if any(
+                k in data
+                for k in ("subject", "from", "body", "content", "text", "html")
+            ):
+                return [data]
+        return []
+
+    def _extract_message_id(self, message: dict, index: int = 0) -> str:
+        """提取邮件唯一标识"""
+        import hashlib
+
+        for key in ("id", "message_id", "uid", "mail_id", "mid", "_id"):
+            value = str(message.get(key) or "").strip()
+            if value:
+                return value
+
+        # 使用内容生成哈希
+        raw = json.dumps(message, ensure_ascii=False, sort_keys=True)
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()
+        return f"msg-{index}-{digest[:16]}"
+
+    def _build_search_text(self, message: dict) -> str:
+        """构建用于搜索的文本内容"""
+        parts = []
+        for key in (
+            "subject",
+            "from",
+            "from_address",
+            "sender",
+            "body",
+            "content",
+            "text",
+            "html",
+            "html_content",
+            "preview",
+            "raw",
+            "raw_content",
+        ):
+            value = message.get(key)
+            if value:
+                parts.append(str(value))
+
+        if not parts:
+            parts.append(json.dumps(message, ensure_ascii=False))
+
+        text = " ".join(parts).strip()
+        return self._yyds_decode_raw_content(text) or text
+
+    def _extract_code_from_message(
+        self, message: dict, code_pattern: str = None
+    ) -> Optional[str]:
+        """从邮件中提取验证码"""
+        # 优先检查直接的验证码字段
+        for key in ("verification_code", "code", "otp", "captcha", "verify_code"):
+            value = str(message.get(key) or "").strip()
+            if value:
+                code = self._yyds_safe_extract(value, code_pattern)
+                if code:
+                    return code
+
+        # 从邮件内容中提取
+        search_text = self._build_search_text(message)
+        return self._yyds_safe_extract(search_text, code_pattern)
+
+    def get_email(self) -> MailboxAccount:
+        """从池中获取一个邮箱账号"""
+        pool_path, record = self._take_next_record()
+        self._selected_record = record
+        self._email = record["email"]
+
+        self._log(f"[HotmailAPI] 使用邮箱池: {pool_path}")
+        self._log(f"[HotmailAPI] 分配邮箱: {record['email']}")
+
+        return MailboxAccount(
+            email=record["email"],
+            account_id=record["email"],
+            extra={
+                "provider": "hotmailapi",
+                "client_id": record["client_id"],
+                "refresh_token": record["refresh_token"],
+                "password": record.get("password", ""),
+                "mailbox": self.mailbox,
+            },
+        )
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        """获取当前邮件 ID 集合"""
+        if not account.extra:
+            return set()
+
+        refresh_token = account.extra.get("refresh_token", "")
+        client_id = account.extra.get("client_id", "")
+
+        if not refresh_token or not client_id:
+            return set()
+
+        try:
+            messages = self._list_new_messages(refresh_token, client_id, account.email)
+            return {
+                self._extract_message_id(msg, i) for i, msg in enumerate(messages)
+            }
+        except Exception:
+            return set()
+
+    def wait_for_code(
+        self,
+        account: MailboxAccount,
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set = None,
+        code_pattern: str = None,
+        **kwargs,
+    ) -> str:
+        """等待并返回验证码"""
+        if not account.extra:
+            raise RuntimeError("HotmailAPI 账号信息不完整")
+
+        refresh_token = account.extra.get("refresh_token", "")
+        client_id = account.extra.get("client_id", "")
+
+        if not refresh_token or not client_id:
+            raise RuntimeError("HotmailAPI 缺少 refresh_token 或 client_id")
+
+        seen = {str(mid) for mid in (before_ids or set())}
+        exclude_codes = {
+            str(code).strip()
+            for code in (kwargs.get("exclude_codes") or set())
+            if str(code or "").strip()
+        }
+
+        def poll_once() -> Optional[str]:
+            try:
+                messages = self._list_new_messages(
+                    refresh_token, client_id, account.email
+                )
+
+                for i, message in enumerate(messages):
+                    message_id = self._extract_message_id(message, i)
+                    if message_id in seen:
+                        continue
+                    seen.add(message_id)
+
+                    search_text = self._build_search_text(message)
+                    if keyword and keyword.lower() not in search_text.lower():
+                        continue
+
+                    code = self._extract_code_from_message(message, code_pattern)
+                    if code and code in exclude_codes:
+                        continue
+                    if code:
+                        self._log(f"[HotmailAPI] 收到验证码: {code}")
+                        return code
+            except Exception as e:
+                self._log(f"[HotmailAPI] 轮询失败: {e}")
+            return None
+
+        return self._run_polling_wait(
+            timeout=timeout,
+            poll_interval=3,
+            poll_once=poll_once,
+            timeout_message=f"[HotmailAPI] 等待验证码超时 ({timeout}s)",
+        )

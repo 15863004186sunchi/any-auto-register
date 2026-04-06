@@ -1,0 +1,26 @@
+# HotmailAPI 账号文件保护
+# 将以下内容添加到你的 .gitignore 文件中
+
+# HotmailAPI 账号文件（保护敏感信息）
+mail/hotmail_accounts.txt
+mail/*_accounts.txt
+mail/*.txt
+!mail/hotmail_accounts_example.txt
+!mail/README.md
+
+# 备份文件
+mail/*.bak
+mail/*.backup
+
+# 临时文件
+mail/*.tmp
+mail/*.temp
+
+# 日志文件
+mail/*.log
+
+# 说明：
+# - 排除所有 mail/*.txt 文件（账号文件）
+# - 但保留 hotmail_accounts_example.txt（示例文件）
+# - 排除备份和临时文件
+# - 如果 mail/ 目录有 README，也保留它
