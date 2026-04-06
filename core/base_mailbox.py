@@ -4544,19 +4544,33 @@ class HotmailAPIMailbox(BaseMailbox):
                         refresh_token, client_id, account.email, mailbox=mb
                     )
                     
-                    # 调试日志：显示获取到的邮件数量
                     self._log(f"[HotmailAPI] 文件夹 {mb} 获取到 {len(messages)} 封邮件")
 
                     for i, message in enumerate(messages):
-                        # 使用带邮箱前缀的 ID 避免冲突
                         message_id = f"{mb}:{self._extract_message_id(message, i)}"
                         
                         if message_id in seen:
                             continue
                         
                         search_text = self._build_search_text(message)
+                        subject = str(message.get("subject", "")).strip()
+                        sender = str(message.get("from", "")).strip() or str(message.get("sender", "")).strip()
                         
-                        if keyword and keyword.lower() not in search_text.lower():
+                        self._log(f"[HotmailAPI] 正在检查邮件 - ID: {message_id}, 发件人: {sender}, 主题: {subject}")
+                        
+                        # 放宽关键词匹配：OpenAI 或 ChatGPT 均可
+                        match_keyword = False
+                        if not keyword:
+                            match_keyword = True
+                        else:
+                            import re
+                            # 将关键词转为正则模式，支持 OpenAI|ChatGPT
+                            pattern = keyword.replace("OpenAI", "(OpenAI|ChatGPT)")
+                            if re.search(pattern, search_text, re.IGNORECASE):
+                                match_keyword = True
+                        
+                        if not match_keyword:
+                            self._log(f"[HotmailAPI] 邮件内容不匹配关键词 '{keyword}'，标记为已读并跳过")
                             seen.add(message_id)
                             continue
 
@@ -4564,20 +4578,25 @@ class HotmailAPIMailbox(BaseMailbox):
                         
                         if code:
                             self._log(f"[HotmailAPI] 从 {mb} 提取到验证码: {code}")
-                            seen.add(message_id)
                             
                             if code in exclude_codes:
                                 self._log(f"[HotmailAPI] 验证码 {code} 在排除列表中，跳过")
+                                seen.add(message_id) # 排除掉的也不再重复检查
                                 continue
                             
-                            self._log(f"[HotmailAPI] ✅ 成功提取验证码: {code}")
+                            self._log(f"[HotmailAPI] ✅ 成功提取有效验证码: {code}")
+                            seen.add(message_id)
                             return code
-                        
-                        seen.add(message_id)
+                        else:
+                            self._log(f"[HotmailAPI] 匹配关键词但未提取到验证码，稍后重试")
+                            # 注意：这里不加进 seen，因为可能邮件还没加载全，或者验证码还没出现在内容里（极少数情况）
+                            # 但为了防止死循环扫描同一封无用邮件，如果这封邮件已经存在很久了，还是得加进 seen
+                            # 暂时先不加，观察日志
 
                 except Exception as e:
                     self._log(f"[HotmailAPI] 文件夹 {mb} 轮询失败: {e}")
             return None
+
 
 
         return self._run_polling_wait(
