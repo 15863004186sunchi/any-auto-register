@@ -3601,8 +3601,15 @@ class OutlookMailbox(BaseMailbox):
                 if status != "OK":
                     return None
                 ids = data[0].split() if data and data[0] else []
+                
+                # [Optimization] Also check Junk Email if not found or as part of the scan
+                # For simplicity in this poll, we scan INBOX. 
+                # If needed in future, we could loop over folders ["INBOX", "Junk", "Junk Email"]
+                
                 if len(ids) > 50:
                     ids = ids[-50:]
+                
+                found_count = 0
                 for uid in ids:
                     uid_str = (
                         uid.decode("utf-8", errors="ignore")
@@ -3611,36 +3618,50 @@ class OutlookMailbox(BaseMailbox):
                     )
                     if not uid_str or uid_str in seen:
                         continue
-                    seen.add(uid_str)
+                    
                     status, msg_data = imap_conn.uid("fetch", uid, "(RFC822)")
-                    if status != "OK":
+                    if status != "OK" or not msg_data:
                         continue
+                    
                     raw = None
-                    for item in msg_data or []:
+                    for item in msg_data:
                         if isinstance(item, tuple) and item[1]:
                             raw = item[1]
                             break
                     if not raw:
                         continue
+                        
                     msg = message_from_bytes(raw, policy=email_default_policy)
                     subject, text_part, html_part = self._extract_message_parts(msg)
+                    
+                    # [Bugfix] Only add to seen if we actually managed to parse the headers
+                    # This prevents skipping the email forever if a transient fetch error occurs
+                    seen.add(uid_str)
+                    found_count += 1
+
                     combined = self._decode_raw_content(
                         " ".join([subject, text_part, html_part]).strip()
                     )
                     if keyword_lower and keyword_lower not in combined.lower():
                         continue
+                        
                     code, source = self._extract_verification_code_scored(
                         subject, text_part, html_part
                     )
                     if code and code not in exclude_codes:
                         if source:
-                            self._log(f"[Outlook] 命中: {source} code={code}")
+                            self._log(f"[Outlook] 命中验证码: {code} (来源: {source}, 主题: {subject[:50]})")
                         return code
+                        
+                    # Fallback to simple extract
                     code = self._safe_extract(combined, code_pattern)
-                    if code:
-                        if code in exclude_codes:
-                            continue
+                    if code and code not in exclude_codes:
+                        self._log(f"[Outlook] 安全提取验证码: {code}")
                         return code
+                
+                if found_count > 0:
+                    self._log(f"[Outlook] 本轮扫描了 {found_count} 封新邮件，未发现匹配验证码")
+
             except Exception:
                 return None
             finally:
@@ -4098,7 +4119,6 @@ class CustomCatchallMailbox(BaseMailbox):
                     seen_key = f"{folder}:{uid}"
                     if seen_key in seen:
                         continue
-                    seen.add(seen_key)
                     
                     msg_info = self._fetch_message_text(conn, uid)
                     
@@ -4106,6 +4126,8 @@ class CustomCatchallMailbox(BaseMailbox):
                     headers_text = msg_info.get("all_headers", "")
                     # 只要任何 header 包含目标邮箱即可
                     if target_email not in headers_text:
+                        # 即使不匹配，也标记为已处理，防止重复拉取
+                        seen.add(seen_key)
                         continue
 
                     # 额外的调试日志
@@ -4116,6 +4138,7 @@ class CustomCatchallMailbox(BaseMailbox):
                     search_text = f"{subject} {body}".strip()
                     
                     if keyword and keyword.lower() not in search_text.lower():
+                        seen.add(seen_key)
                         continue
                     code = self._safe_extract(search_text, code_pattern)
                     if code and code in exclude_codes:
@@ -4478,18 +4501,26 @@ class HotmailAPIMailbox(BaseMailbox):
                     message_id = self._extract_message_id(message, i)
                     if message_id in seen:
                         continue
-                    seen.add(message_id)
-
+                    
                     search_text = self._build_search_text(message)
                     if keyword and keyword.lower() not in search_text.lower():
+                        # Still add to seen if it doesn't match keyword, to avoid re-scanning
+                        seen.add(message_id)
                         continue
 
                     code = self._extract_code_from_message(message, code_pattern)
+                    
+                    # [Bugfix] Only add to seen if we successfully processed/extracted (or decided it's invalid)
+                    # For HotmailAPI, the message is already in memory, so if code is None, 
+                    # it means it's really not there.
+                    seen.add(message_id)
+
                     if code and code in exclude_codes:
                         continue
                     if code:
-                        self._log(f"[HotmailAPI] 收到验证码: {code}")
+                        self._log(f"[HotmailAPI] 成功提取验证码: {code}")
                         return code
+
             except Exception as e:
                 self._log(f"[HotmailAPI] 轮询失败: {e}")
             return None
