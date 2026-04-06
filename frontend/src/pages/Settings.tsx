@@ -77,8 +77,17 @@ const TAB_ITEMS = [
           { key: 'proxy_sync_url', label: '代理同步 URL', placeholder: 'https://...', secret: true },
         ],
       },
+      {
+        title: '全局动态代理 / 旋转代理',
+        desc: '如果任务未指定代理且代理池为空，将回退到此动态代理（支持单个动态 IP URL）',
+        fields: [
+          { key: 'dynamic_proxy_url', label: '动态代理 URL', placeholder: 'http://user:pass@rotate.proxy.com:port', secret: true },
+          { key: 'proxy_rotation_enabled', label: '启用自动旋转逻辑（预留）', type: 'switch' },
+        ],
+      },
     ],
   },
+
   {
     key: 'mailbox',
     label: '邮箱服务',

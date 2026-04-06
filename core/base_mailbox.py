@@ -4348,18 +4348,20 @@ class HotmailAPIMailbox(BaseMailbox):
         return data
 
     def _list_new_messages(
-        self, refresh_token: str, client_id: str, email: str
+        self, refresh_token: str, client_id: str, email: str, mailbox: str = None
     ) -> list[dict]:
         """
         调用 /api/mail-new 获取新邮件（使用 POST 请求）
         """
+        mailbox = mailbox or self.mailbox
         payload = {
             "refresh_token": refresh_token,
             "client_id": client_id,
             "email": email,
-            "mailbox": self.mailbox,
+            "mailbox": mailbox,
             "response_type": "json",
         }
+
 
         try:
             self._log(f"[HotmailAPI] 调用 API: POST {self.api}/api/mail-new")
@@ -4435,7 +4437,7 @@ class HotmailAPIMailbox(BaseMailbox):
             parts.append(json.dumps(message, ensure_ascii=False))
 
         text = " ".join(parts).strip()
-        return self._yyds_decode_raw_content(text) or text
+        return self._decode_raw_content(text) or text
 
     def _extract_code_from_message(
         self, message: dict, code_pattern: str = None
@@ -4445,13 +4447,14 @@ class HotmailAPIMailbox(BaseMailbox):
         for key in ("verification_code", "code", "otp", "captcha", "verify_code"):
             value = str(message.get(key) or "").strip()
             if value:
-                code = self._yyds_safe_extract(value, code_pattern)
+                code = self._safe_extract(value, code_pattern)
                 if code:
                     return code
 
         # 从邮件内容中提取
         search_text = self._build_search_text(message)
-        return self._yyds_safe_extract(search_text, code_pattern)
+        return self._safe_extract(search_text, code_pattern)
+
 
     def get_email(self) -> MailboxAccount:
         """从池中获取一个邮箱账号"""
@@ -4485,13 +4488,17 @@ class HotmailAPIMailbox(BaseMailbox):
         if not refresh_token or not client_id:
             return set()
 
-        try:
-            messages = self._list_new_messages(refresh_token, client_id, account.email)
-            return {
-                self._extract_message_id(msg, i) for i, msg in enumerate(messages)
-            }
-        except Exception:
-            return set()
+        ids = set()
+        # 默认检查这两个核心文件夹
+        for mb in ["INBOX", "Junk"]:
+            try:
+                messages = self._list_new_messages(refresh_token, client_id, account.email, mailbox=mb)
+                for i, msg in enumerate(messages):
+                    ids.add(f"{mb}:{self._extract_message_id(msg, i)}")
+            except Exception:
+                continue
+        return ids
+
 
     def wait_for_code(
         self,
@@ -4512,65 +4519,66 @@ class HotmailAPIMailbox(BaseMailbox):
         if not refresh_token or not client_id:
             raise RuntimeError("HotmailAPI 缺少 refresh_token 或 client_id")
 
+        # 记录开始等待的时间戳
+        import time
+        start_time = time.time()
+        otp_sent_at = kwargs.get("otp_sent_at", start_time)
+        
+        self._log(f"[HotmailAPI] 开始等待验证码，起始时间: {start_time}")
+        self._log(f"[HotmailAPI] OTP 发送时间: {otp_sent_at}")
+
         seen = {str(mid) for mid in (before_ids or set())}
         exclude_codes = {
             str(code).strip()
             for code in (kwargs.get("exclude_codes") or set())
             if str(code or "").strip()
         }
+        
+        self._log(f"[HotmailAPI] 已处理邮件数: {len(seen)}")
+        self._log(f"[HotmailAPI] 排除验证码数: {len(exclude_codes)}")
 
         def poll_once() -> Optional[str]:
-            try:
-                messages = self._list_new_messages(
-                    refresh_token, client_id, account.email
-                )
-                
-                # 调试日志：显示获取到的邮件数量
-                self._log(f"[HotmailAPI] 本次轮询获取到 {len(messages)} 封邮件")
+            for mb in ["INBOX", "Junk"]:
+                try:
+                    messages = self._list_new_messages(
+                        refresh_token, client_id, account.email, mailbox=mb
+                    )
+                    
+                    # 调试日志：显示获取到的邮件数量
+                    self._log(f"[HotmailAPI] 文件夹 {mb} 获取到 {len(messages)} 封邮件")
 
-                for i, message in enumerate(messages):
-                    message_id = self._extract_message_id(message, i)
-                    
-                    # 调试日志：显示邮件 ID
-                    self._log(f"[HotmailAPI] 处理邮件 #{i+1}, ID: {message_id}")
-                    
-                    if message_id in seen:
-                        self._log(f"[HotmailAPI] 邮件 {message_id} 已处理过，跳过")
-                        continue
-                    
-                    search_text = self._build_search_text(message)
-                    
-                    # 调试日志：显示邮件内容摘要
-                    preview = search_text[:100] if search_text else "(空内容)"
-                    self._log(f"[HotmailAPI] 邮件内容预览: {preview}")
-                    
-                    if keyword and keyword.lower() not in search_text.lower():
-                        self._log(f"[HotmailAPI] 邮件不包含关键词 '{keyword}'，跳过")
+                    for i, message in enumerate(messages):
+                        # 使用带邮箱前缀的 ID 避免冲突
+                        message_id = f"{mb}:{self._extract_message_id(message, i)}"
+                        
+                        if message_id in seen:
+                            continue
+                        
+                        search_text = self._build_search_text(message)
+                        
+                        if keyword and keyword.lower() not in search_text.lower():
+                            seen.add(message_id)
+                            continue
+
+                        code = self._extract_code_from_message(message, code_pattern)
+                        
+                        if code:
+                            self._log(f"[HotmailAPI] 从 {mb} 提取到验证码: {code}")
+                            seen.add(message_id)
+                            
+                            if code in exclude_codes:
+                                self._log(f"[HotmailAPI] 验证码 {code} 在排除列表中，跳过")
+                                continue
+                            
+                            self._log(f"[HotmailAPI] ✅ 成功提取验证码: {code}")
+                            return code
+                        
                         seen.add(message_id)
-                        continue
 
-                    code = self._extract_code_from_message(message, code_pattern)
-                    
-                    # 调试日志：显示提取结果
-                    if code:
-                        self._log(f"[HotmailAPI] 从邮件中提取到验证码: {code}")
-                    else:
-                        self._log(f"[HotmailAPI] 未能从邮件中提取验证码")
-                    
-                    seen.add(message_id)
-
-                    if code and code in exclude_codes:
-                        self._log(f"[HotmailAPI] 验证码 {code} 在排除列表中，跳过")
-                        continue
-                    if code:
-                        self._log(f"[HotmailAPI] ✅ 成功提取验证码: {code}")
-                        return code
-
-            except Exception as e:
-                self._log(f"[HotmailAPI] 轮询失败: {e}")
-                import traceback
-                self._log(f"[HotmailAPI] 错误详情: {traceback.format_exc()}")
+                except Exception as e:
+                    self._log(f"[HotmailAPI] 文件夹 {mb} 轮询失败: {e}")
             return None
+
 
         return self._run_polling_wait(
             timeout=timeout,

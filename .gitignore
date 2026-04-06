@@ -21,6 +21,22 @@ logs/
 accounts.txt
 *_accounts.txt
 account.txt
+mail.txt
+mail_accounts.txt
+
+# 认证与敏感信息
+auth.json
+*.json.bak
+
+# 脚本与临时文件
+scripts/test_*.py
+scripts/debug_*.py
+scripts/set_proxy.py
+BOT_DETECTION_ANALYSIS.md
+FIX_IMPLEMENTATION_SUMMARY.md
+README_OPTIMIZATION.md
+*.bat
+*.ps1
 
 # 前端
 frontend/node_modules/

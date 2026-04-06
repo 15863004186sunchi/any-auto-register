@@ -5,7 +5,11 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 
 
 def normalize_proxy_url(proxy_url: Optional[str]) -> Optional[str]:
-    """将 socks5:// 规范化为 socks5h://，避免本地 DNS 泄漏。"""
+    """
+    规范化代理 URL。
+    1. 支持 host:port:user:pass 格式并转换为 http://user:pass@host:port
+    2. 将 socks5:// 规范化为 socks5h://，避免本地 DNS 泄漏。
+    """
     if proxy_url is None:
         return None
 
@@ -13,11 +17,27 @@ def normalize_proxy_url(proxy_url: Optional[str]) -> Optional[str]:
     if not value:
         return None
 
+    # 特殊处理 host:port:user:pass 格式
+    if "://" not in value:
+        parts = value.split(":")
+        if len(parts) == 4:
+            host, port, user, password = parts
+            return f"http://{user}:{password}@{host}:{port}"
+        elif len(parts) == 2:
+            # host:port 格式
+            return f"http://{value}"
+
     parts = urlsplit(value)
-    if (parts.scheme or "").lower() == "socks5":
+    scheme = (parts.scheme or "").lower()
+    if scheme == "socks5":
         parts = parts._replace(scheme="socks5h")
         return urlunsplit(parts)
+    elif not scheme and parts.netloc:
+        # 补全缺失的 http://
+        return f"http://{value}"
+        
     return value
+
 
 
 def build_requests_proxy_config(proxy_url: Optional[str]) -> Optional[dict[str, str]]:

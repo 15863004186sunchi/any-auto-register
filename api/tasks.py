@@ -213,9 +213,23 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 attempt_id = control.start_attempt()
                 control.checkpoint(attempt_id=attempt_id)
                 _proxy = req.proxy
-                if not _proxy:
+
+                if _proxy:
+                    _log(task_id, f"使用任务指定代理: {_proxy}")
+                else:
                     _proxy = proxy_pool.get_next()
+                    if _proxy:
+                        _log(task_id, f"从代理池选取代理: {_proxy}")
+                    else:
+                        # 尝试动态代理
+                        _proxy = proxy_pool.get_dynamic_proxy()
+                        if _proxy:
+                            _log(task_id, f"使用全局动态代理: {_proxy}")
+                        else:
+                            _log(task_id, "⚠️ 未检测到可用代理（任务未指定、代理池为空且未配置动态代理）", "warning")
+                
                 _proxy = normalize_proxy_url(_proxy)
+
                 if req.register_delay_seconds > 0:
                     with start_gate_lock:
                         control.checkpoint(attempt_id=attempt_id)
@@ -256,7 +270,10 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 _task_store.set_progress(task_id, f"{i + 1}/{req.count}")
                 _log(task_id, f"开始注册第 {i + 1}/{req.count} 个账号")
                 if _proxy:
-                    _log(task_id, f"使用代理: {_proxy}")
+                    _log(task_id, f"[代理确认] 任务正在使用代理: {_proxy}")
+                else:
+                    _log(task_id, "[代理确认] 任务未使用任何代理 (直连)")
+
                 account = _platform.register(
                     email=req.email or None,
                     password=req.password,

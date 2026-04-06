@@ -210,21 +210,47 @@ class RefreshTokenRegistrationEngine:
             return max(minimum, min(parsed, maximum))
         return max(minimum, min(int(default), maximum))
 
-    def _build_chatgpt_client(self) -> ChatGPTClient:
+    def _build_chatgpt_client(
+        self,
+        device_id: str | None = None,
+        user_agent: str | None = None,
+        sec_ch_ua: str | None = None,
+        impersonate: str | None = None,
+        accept_language: str | None = None,
+        timezone_offset: int | None = None,
+    ) -> ChatGPTClient:
         client = ChatGPTClient(
             proxy=self.proxy_url,
             verbose=False,
             browser_mode=self.browser_mode,
+            device_id=device_id,
+            user_agent=user_agent,
+            sec_ch_ua=sec_ch_ua,
+            impersonate=impersonate,
+            accept_language=accept_language,
+            timezone_offset=timezone_offset,
         )
         client._log = lambda msg: self._log(f"[注册链路] {msg}")
         return client
 
-    def _build_oauth_client(self) -> OAuthClient:
+    def _build_oauth_client(
+        self,
+        device_id: str | None = None,
+        user_agent: str | None = None,
+        sec_ch_ua: str | None = None,
+        impersonate: str | None = None,
+        accept_language: str | None = None,
+    ) -> OAuthClient:
         client = OAuthClient(
             self.extra_config,
             proxy=self.proxy_url,
             verbose=False,
             browser_mode=self.browser_mode,
+            device_id=device_id,
+            user_agent=user_agent,
+            sec_ch_ua=sec_ch_ua,
+            impersonate=impersonate,
+            accept_language=accept_language,
         )
         client._log = lambda msg: self._log(f"[登录链路] {msg}")
         return client
@@ -367,7 +393,69 @@ class RefreshTokenRegistrationEngine:
                 self._log,
             )
 
-            register_client = self._build_chatgpt_client()
+            # 生成一次性的浏览器指纹和设备标识，在整个流程中保持一致
+            from .utils import generate_device_id
+            import random
+            
+            shared_device_id = generate_device_id()
+            
+            # 随机选择 Chrome 版本（只选一次）
+            chrome_profiles = [
+                {
+                    "major": 131,
+                    "impersonate": "chrome131",
+                    "build": 6778,
+                    "patch_range": (69, 205),
+                    "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                },
+                {
+                    "major": 133,
+                    "impersonate": "chrome133a",
+                    "build": 6943,
+                    "patch_range": (33, 153),
+                    "sec_ch_ua": '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
+                },
+                {
+                    "major": 136,
+                    "impersonate": "chrome136",
+                    "build": 7103,
+                    "patch_range": (48, 175),
+                    "sec_ch_ua": '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
+                },
+            ]
+            profile = random.choice(chrome_profiles)
+            major = profile["major"]
+            build = profile["build"]
+            patch = random.randint(*profile["patch_range"])
+            full_ver = f"{major}.0.{build}.{patch}"
+            shared_user_agent = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{full_ver} Safari/537.36"
+            shared_sec_ch_ua = profile["sec_ch_ua"]
+            shared_impersonate = profile["impersonate"]
+            
+            # 随机选择语言（只选一次）
+            shared_accept_language = random.choice([
+                "en-US,en;q=0.9",
+                "en-US,en;q=0.9,zh-CN;q=0.8",
+                "en,en-US;q=0.9",
+                "en-US,en;q=0.8",
+            ])
+            
+            # 随机选择时区（只选一次）
+            shared_timezone_offset = random.randint(-8, -4) if "US" in shared_accept_language else random.randint(0, 8)
+            
+            self._log(f"[会话指纹] device_id={shared_device_id}")
+            self._log(f"[会话指纹] Chrome={full_ver}, impersonate={shared_impersonate}")
+            self._log(f"[会话指纹] Accept-Language={shared_accept_language}")
+            self._log(f"[会话指纹] Timezone={shared_timezone_offset}")
+
+            register_client = self._build_chatgpt_client(
+                device_id=shared_device_id,
+                user_agent=shared_user_agent,
+                sec_ch_ua=shared_sec_ch_ua,
+                impersonate=shared_impersonate,
+                accept_language=shared_accept_language,
+                timezone_offset=shared_timezone_offset,
+            )
             self._log("2. 执行注册状态机（interrupt 模式：不在注册阶段提交 about_you）...")
             registered, registration_message = register_client.register_complete_flow(
                 result.email,
@@ -402,21 +490,27 @@ class RefreshTokenRegistrationEngine:
                         "将继续进入 OAuth 会话，按状态机实际返回推进。"
                     )
 
-            oauth_client = self._build_oauth_client()
+            oauth_client = self._build_oauth_client(
+                device_id=shared_device_id,
+                user_agent=shared_user_agent,
+                sec_ch_ua=shared_sec_ch_ua,
+                impersonate=shared_impersonate,
+                accept_language=shared_accept_language,
+            )
             use_login_front_half = registration_message == "pending_about_you_submission"
 
             if use_login_front_half:
                 self._log("3. 新开 OAuth session，严格复刻 login_and_get_tokens 登录链路")
-                self._log("4. 本轮仅共享邮箱+密码，其它会话数据全新")
+                self._log("4. 共享 device_id + 浏览器指纹，确保会话一致性")
                 self._log("5. 登录成功后提交 about_you，并继续 workspace/token 流程")
                 oauth_client._recreate_session()  # 清空 cookie 容器，保留 device_id
                 tokens = oauth_client.login_and_get_tokens(
                     result.email,
                     self.password,
-                    device_id=getattr(register_client, "device_id", ""),
-                    user_agent=getattr(register_client, "ua", None),
-                    sec_ch_ua=getattr(register_client, "sec_ch_ua", None),
-                    impersonate=getattr(register_client, "impersonate", None),
+                    device_id=shared_device_id,
+                    user_agent=shared_user_agent,
+                    sec_ch_ua=shared_sec_ch_ua,
+                    impersonate=shared_impersonate,
                     skymail_client=email_adapter,
                     prefer_passwordless_login=False,
                     allow_phone_verification=False,
@@ -437,7 +531,8 @@ class RefreshTokenRegistrationEngine:
                 )
             else:
                 self._log("3. 新开 OAuth session，按 screen_hint=login + passwordless OTP 登录...")
-                self._log("4. 若命中 about_you，则在 OAuth 会话内提交姓名+生日，再继续 workspace/token")
+                self._log("4. 共享 device_id + 浏览器指纹，确保会话一致性")
+                self._log("5. 若命中 about_you，则在 OAuth 会话内提交姓名+生日，再继续 workspace/token")
                 oauth_screen_hint = "login"
                 oauth_force_password_login = False
                 oauth_force_chatgpt_entry = False
@@ -445,10 +540,10 @@ class RefreshTokenRegistrationEngine:
                 tokens = oauth_client.login_and_get_tokens(
                     result.email,
                     self.password,
-                    device_id=getattr(register_client, "device_id", ""),
-                    user_agent=getattr(register_client, "ua", None),
-                    sec_ch_ua=getattr(register_client, "sec_ch_ua", None),
-                    impersonate=getattr(register_client, "impersonate", None),
+                    device_id=shared_device_id,
+                    user_agent=shared_user_agent,
+                    sec_ch_ua=shared_sec_ch_ua,
+                    impersonate=shared_impersonate,
                     skymail_client=email_adapter,
                     prefer_passwordless_login=not oauth_force_password_login,
                     allow_phone_verification=False,

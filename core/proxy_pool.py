@@ -31,6 +31,15 @@ class ProxyPool:
                 self._index += 1
             return proxies[idx].url
 
+    def get_dynamic_proxy(self) -> Optional[str]:
+        """获取配置中的动态/旋转代理 URL"""
+        from .config_store import config_store
+        url = config_store.get("dynamic_proxy_url", "").strip()
+        if url:
+            return url
+        return None
+
+
     def report_success(self, url: str) -> None:
         with Session(engine) as s:
             p = s.exec(select(ProxyModel).where(ProxyModel.url == url)).first()

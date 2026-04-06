@@ -75,7 +75,18 @@ class ChatGPTClient:
     BASE = "https://chatgpt.com"
     AUTH = "https://auth.openai.com"
 
-    def __init__(self, proxy=None, verbose=True, browser_mode="protocol"):
+    def __init__(
+        self,
+        proxy=None,
+        verbose=True,
+        browser_mode="protocol",
+        device_id=None,
+        user_agent=None,
+        sec_ch_ua=None,
+        impersonate=None,
+        accept_language=None,
+        timezone_offset=None,
+    ):
         """
         初始化 ChatGPT 客户端
 
@@ -83,37 +94,75 @@ class ChatGPTClient:
             proxy: 代理地址
             verbose: 是否输出详细日志
             browser_mode: protocol | headless | headed
+            device_id: 设备 ID（如果不提供则自动生成）
+            user_agent: User-Agent（如果不提供则自动生成）
+            sec_ch_ua: sec-ch-ua header（如果不提供则自动生成）
+            impersonate: curl_cffi impersonate 参数（如果不提供则自动生成）
+            accept_language: Accept-Language header（如果不提供则自动生成）
+            timezone_offset: 时区偏移（如果不提供则自动生成）
         """
         self.proxy = proxy
         self.verbose = verbose
         self.browser_mode = browser_mode or "protocol"
-        self.device_id = str(uuid.uuid4())
-        self.accept_language = random.choice(
-            [
-                "en-US,en;q=0.9",
-                "en-US,en;q=0.9,zh-CN;q=0.8",
-                "en,en-US;q=0.9",
-                "en-US,en;q=0.8",
-            ]
-        )
+        
+        # 如果提供了完整的指纹参数，使用它们；否则随机生成
+        if user_agent and sec_ch_ua and impersonate:
+            self.ua = user_agent
+            self.sec_ch_ua = sec_ch_ua
+            self.impersonate = impersonate
+            # 从 user_agent 中提取 Chrome 版本
+            import re
+            match = re.search(r'Chrome/(\d+)\.0\.(\d+)\.(\d+)', user_agent)
+            if match:
+                self.chrome_major = int(match.group(1))
+                self.chrome_full = f"{match.group(1)}.0.{match.group(2)}.{match.group(3)}"
+            else:
+                self.chrome_major = 136
+                self.chrome_full = "136.0.7103.92"
+        else:
+            # 随机 Chrome 版本
+            (
+                self.impersonate,
+                self.chrome_major,
+                self.chrome_full,
+                self.ua,
+                self.sec_ch_ua,
+            ) = _random_chrome_version()
+        
+        # Device ID
+        self.device_id = device_id or str(uuid.uuid4())
+        
+        # Accept-Language
+        if accept_language:
+            self.accept_language = accept_language
+        else:
+            self.accept_language = random.choice(
+                [
+                    "en-US,en;q=0.9",
+                    "en-US,en;q=0.9,zh-CN;q=0.8",
+                    "en,en-US;q=0.9",
+                    "en-US,en;q=0.8",
+                ]
+            )
+        
         self.language = self.accept_language.split(",")[0]
-        # 随机时区偏移 (-8 to +8)
-        self.timezone_offset = random.randint(-8, -4) if "US" in self.accept_language else random.randint(0, 8) 
-
-        # 随机 Chrome 版本
-        (
-            self.impersonate,
-            self.chrome_major,
-            self.chrome_full,
-            self.ua,
-            self.sec_ch_ua,
-        ) = _random_chrome_version()
+        
+        # 时区偏移
+        if timezone_offset is not None:
+            self.timezone_offset = timezone_offset
+        else:
+            # 随机时区偏移 (-8 to +8)
+            self.timezone_offset = random.randint(-8, -4) if "US" in self.accept_language else random.randint(0, 8)
 
         # 创建 session
         self.session = curl_requests.Session(impersonate=self.impersonate)
 
         if self.proxy:
             self.session.proxies = build_requests_proxy_config(self.proxy)
+            self._log(f"ChatGPTClient 已应用代理: {self.proxy}")
+        else:
+            self._log("ChatGPTClient 未使用代理 (直连)")
+
 
         # 设置基础 headers
         self.session.headers.update(
@@ -467,7 +516,8 @@ class ChatGPTClient:
 
     def visit_homepage(self):
         """访问首页，建立 session"""
-        self._log("访问 ChatGPT 首页...")
+        self._log(f"访问 ChatGPT 首页... (使用代理: {self.proxy or '直连'})")
+
         url = f"{self.BASE}/"
         try:
             self._browser_pause()
@@ -581,7 +631,8 @@ class ChatGPTClient:
                     )
                     time.sleep(1)  # 重试前等待
                 else:
-                    self._log("访问 authorize URL...")
+                    self._log(f"访问 authorize URL... (使用代理: {self.proxy or '直连'})")
+
 
                 self._browser_pause()
                 r = self.session.get(

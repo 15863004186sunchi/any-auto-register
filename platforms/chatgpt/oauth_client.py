@@ -35,7 +35,18 @@ from .sentinel_browser import get_sentinel_token_via_browser
 class OAuthClient:
     """OAuth 客户端 - 用于获取 Access Token 和 Refresh Token"""
 
-    def __init__(self, config, proxy=None, verbose=True, browser_mode="protocol"):
+    def __init__(
+        self,
+        config,
+        proxy=None,
+        verbose=True,
+        browser_mode="protocol",
+        device_id=None,
+        user_agent=None,
+        sec_ch_ua=None,
+        impersonate=None,
+        accept_language=None,
+    ):
         """
         初始化 OAuth 客户端
 
@@ -44,6 +55,11 @@ class OAuthClient:
             proxy: 代理地址
             verbose: 是否输出详细日志
             browser_mode: protocol | headless | headed
+            device_id: 设备 ID（如果不提供则自动生成）
+            user_agent: User-Agent（如果不提供则自动生成）
+            sec_ch_ua: sec-ch-ua header（如果不提供则自动生成）
+            impersonate: curl_cffi impersonate 参数（如果不提供则自动生成）
+            accept_language: Accept-Language header（如果不提供则自动生成）
         """
         self.config = dict(config or {})
         self.oauth_issuer = self.config.get("oauth_issuer", "https://auth.openai.com")
@@ -59,11 +75,22 @@ class OAuthClient:
         self.last_error = ""
         self.last_workspace_id = ""
         self.last_state = FlowState()
+        
+        # 保存传入的指纹参数，用于后续请求
+        self._shared_device_id = device_id
+        self._shared_user_agent = user_agent
+        self._shared_sec_ch_ua = sec_ch_ua
+        self._shared_impersonate = impersonate
+        self._shared_accept_language = accept_language
 
         # 创建 session
         self.session = curl_requests.Session()
         if self.proxy:
             self.session.proxies = build_requests_proxy_config(self.proxy)
+        
+        # 如果提供了 Accept-Language，设置到 session headers
+        if accept_language:
+            self.session.headers["Accept-Language"] = accept_language
 
     def _log(self, msg):
         """输出日志"""
@@ -116,26 +143,36 @@ class OAuthClient:
         return ua, profile["sec_ch_ua"], profile["impersonate"]
 
     def _ensure_oauth_fingerprint(self, user_agent, sec_ch_ua, impersonate):
-        if user_agent and sec_ch_ua and impersonate:
-            return user_agent, sec_ch_ua, impersonate
+        # 优先使用初始化时传入的共享指纹
+        if self._shared_user_agent and self._shared_sec_ch_ua and self._shared_impersonate:
+            user_agent = user_agent or self._shared_user_agent
+            sec_ch_ua = sec_ch_ua or self._shared_sec_ch_ua
+            impersonate = impersonate or self._shared_impersonate
+        elif user_agent and sec_ch_ua and impersonate:
+            # 如果调用时提供了完整参数，使用它们
+            pass
+        else:
+            # 否则随机生成
+            ua, ch_ua, imp = self._random_chrome_fingerprint()
+            user_agent = user_agent or ua
+            sec_ch_ua = sec_ch_ua or ch_ua
+            impersonate = impersonate or imp
 
-        ua, ch_ua, imp = self._random_chrome_fingerprint()
-        user_agent = user_agent or ua
-        sec_ch_ua = sec_ch_ua or ch_ua
-        impersonate = impersonate or imp
+        # 使用共享的 Accept-Language 或随机选择
+        accept_language = self._shared_accept_language or random.choice(
+            [
+                "en-US,en;q=0.9",
+                "en-US,en;q=0.9,zh-CN;q=0.8",
+                "en,en-US;q=0.9",
+                "en-US,en;q=0.8",
+            ]
+        )
 
         try:
             self.session.headers.update(
                 {
                     "User-Agent": user_agent,
-                    "Accept-Language": random.choice(
-                        [
-                            "en-US,en;q=0.9",
-                            "en-US,en;q=0.9,zh-CN;q=0.8",
-                            "en,en-US;q=0.9",
-                            "en-US,en;q=0.8",
-                        ]
-                    ),
+                    "Accept-Language": accept_language,
                     "sec-ch-ua": sec_ch_ua,
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": '"Windows"',
@@ -1115,10 +1152,14 @@ class OAuthClient:
             return None
 
     def _recreate_session(self):
-        """重建会话，确保恢复链路使用全新 cookie 容器。"""
+        """重建会话，确保恢复链路使用全新 cookie 容器，但保留共享的指纹参数。"""
         self.session = curl_requests.Session()
         if self.proxy:
             self.session.proxies = build_requests_proxy_config(self.proxy)
+        
+        # 恢复共享的 Accept-Language
+        if self._shared_accept_language:
+            self.session.headers["Accept-Language"] = self._shared_accept_language
 
     def login_and_get_tokens(
         self,
@@ -1193,9 +1234,13 @@ class OAuthClient:
             device_id = str(uuid.uuid4())
             self._log(f"force_new_browser: 新 device_id={device_id}")
         else:
+            # 优先使用传入的 device_id，其次使用共享的 device_id，最后才生成新的
             if not device_id:
-                device_id = str(uuid.uuid4())
-                self._log(f"OAuth device_id 缺失，已生成新的 device_id={device_id}")
+                device_id = self._shared_device_id or str(uuid.uuid4())
+                if self._shared_device_id:
+                    self._log(f"OAuth 使用共享 device_id={device_id}")
+                else:
+                    self._log(f"OAuth device_id 缺失，已生成新的 device_id={device_id}")
 
         user_agent, sec_ch_ua, impersonate = self._ensure_oauth_fingerprint(
             user_agent, sec_ch_ua, impersonate

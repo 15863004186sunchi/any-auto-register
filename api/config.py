@@ -97,7 +97,10 @@ CONFIG_KEYS = [
     "catchall_imap_user",
     "catchall_imap_password",
     "proxy_sync_url",
+    "dynamic_proxy_url",
+    "proxy_rotation_enabled",
 ]
+
 
 
 class ConfigUpdate(BaseModel):
