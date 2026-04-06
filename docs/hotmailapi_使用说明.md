@@ -33,8 +33,11 @@ CaesarPhryne2274@hotmail.com----eg699579----9e5f94bc-e8a4-4e73-b8be-63364c29d753
 你需要一个提供以下接口的 API 服务：
 
 ```
-GET /api/mail-new
-参数：
+POST /api/mail-new
+请求头：
+  Content-Type: application/json
+  
+请求体：
   - refresh_token: OAuth refresh token
   - client_id: OAuth client ID
   - email: 邮箱地址

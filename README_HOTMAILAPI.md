@@ -93,13 +93,18 @@ python scripts/test_hotmailapi.py
 你的 API 服务需要提供以下接口：
 
 ```
-GET /api/mail-new
-参数：
-  - refresh_token: OAuth refresh token
-  - client_id: OAuth client ID
-  - email: 邮箱地址
-  - mailbox: 邮箱文件夹（默认 INBOX）
-  - response_type: json
+POST /api/mail-new
+请求头：
+  Content-Type: application/json
+  
+请求体：
+  {
+    "refresh_token": "OAuth refresh token",
+    "client_id": "OAuth client ID",
+    "email": "邮箱地址",
+    "mailbox": "邮箱文件夹（默认 INBOX）",
+    "response_type": "json"
+  }
 
 返回：JSON 格式的邮件列表
 ```

@@ -4291,7 +4291,10 @@ class HotmailAPIMailbox(BaseMailbox):
             return pool_path, record
 
     def _headers(self) -> dict[str, str]:
-        return {"accept": "application/json"}
+        return {
+            "accept": "application/json",
+            "Content-Type": "application/json",
+        }
 
     def _request_json(
         self,
@@ -4299,6 +4302,7 @@ class HotmailAPIMailbox(BaseMailbox):
         path: str,
         *,
         params: dict = None,
+        json_data: dict = None,
         timeout: int = 15,
     ) -> Any:
         import requests
@@ -4307,14 +4311,25 @@ class HotmailAPIMailbox(BaseMailbox):
             raise RuntimeError("HotmailAPI 未配置 API URL")
 
         url = f"{self.api}{path}"
-        response = requests.request(
-            method,
-            url,
-            params=params,
-            headers=self._headers(),
-            proxies=self.proxy,
-            timeout=timeout,
-        )
+        
+        # 根据请求方法选择参数传递方式
+        if method.upper() == "POST":
+            response = requests.post(
+                url,
+                json=json_data or params,
+                headers=self._headers(),
+                proxies=self.proxy,
+                timeout=timeout,
+            )
+        else:
+            response = requests.request(
+                method,
+                url,
+                params=params,
+                headers=self._headers(),
+                proxies=self.proxy,
+                timeout=timeout,
+            )
 
         try:
             data = response.json()
@@ -4336,9 +4351,9 @@ class HotmailAPIMailbox(BaseMailbox):
         self, refresh_token: str, client_id: str, email: str
     ) -> list[dict]:
         """
-        调用 /api/mail-new 获取新邮件
+        调用 /api/mail-new 获取新邮件（使用 POST 请求）
         """
-        params = {
+        payload = {
             "refresh_token": refresh_token,
             "client_id": client_id,
             "email": email,
@@ -4347,7 +4362,7 @@ class HotmailAPIMailbox(BaseMailbox):
         }
 
         try:
-            data = self._request_json("GET", "/api/mail-new", params=params, timeout=15)
+            data = self._request_json("POST", "/api/mail-new", json_data=payload, timeout=15)
         except Exception as e:
             self._log(f"[HotmailAPI] 获取新邮件失败: {e}")
             return []

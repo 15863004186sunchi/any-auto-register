@@ -39,21 +39,31 @@ BeatrizQuill1241@hotmail.com----uw923904----9e5f94bc-e8a4-4e73-b8be-63364c29d753
 
 ### 获取新邮件
 
-**接口**: `GET /api/mail-new`
+**接口**: `POST /api/mail-new`
 
-**参数**:
-- `refresh_token`: OAuth Refresh Token
-- `client_id`: OAuth Client ID
-- `email`: 邮箱地址
-- `mailbox`: 邮箱文件夹（默认 INBOX）
-- `response_type`: 响应类型（json）
+**请求头**:
+```
+Content-Type: application/json
+```
+
+**请求体**:
+```json
+{
+  "refresh_token": "OAuth Refresh Token",
+  "client_id": "OAuth Client ID",
+  "email": "邮箱地址",
+  "mailbox": "邮箱文件夹（默认 INBOX）",
+  "response_type": "json"
+}
+```
 
 **示例请求**:
 ```python
 import requests
 
 url = "https://yourdomain.com/api/mail-new"
-params = {
+headers = {"Content-Type": "application/json"}
+data = {
     "refresh_token": "your_refresh_token",
     "client_id": "your_client_id",
     "email": "your_email@hotmail.com",
@@ -61,7 +71,7 @@ params = {
     "response_type": "json"
 }
 
-response = requests.get(url, params=params)
+response = requests.post(url, headers=headers, json=data)
 data = response.json()
 ```
 
