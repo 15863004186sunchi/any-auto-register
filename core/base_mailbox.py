@@ -4362,25 +4362,38 @@ class HotmailAPIMailbox(BaseMailbox):
         }
 
         try:
+            self._log(f"[HotmailAPI] 调用 API: POST {self.api}/api/mail-new")
+            self._log(f"[HotmailAPI] 请求参数: email={email}, mailbox={self.mailbox}")
+            
             data = self._request_json("POST", "/api/mail-new", json_data=payload, timeout=15)
+            
+            self._log(f"[HotmailAPI] API 返回数据类型: {type(data).__name__}")
+            
         except Exception as e:
             self._log(f"[HotmailAPI] 获取新邮件失败: {e}")
             return []
 
         # 解析响应数据
         if isinstance(data, list):
+            self._log(f"[HotmailAPI] API 返回邮件列表，共 {len(data)} 封")
             return data
         elif isinstance(data, dict):
+            self._log(f"[HotmailAPI] API 返回字典，键: {list(data.keys())}")
             # 尝试从常见的键中提取邮件列表
             for key in ("data", "messages", "mails", "emails", "items", "list"):
                 if key in data and isinstance(data[key], list):
+                    self._log(f"[HotmailAPI] 从 '{key}' 键提取到 {len(data[key])} 封邮件")
                     return data[key]
             # 如果响应本身就是一个邮件对象
             if any(
                 k in data
                 for k in ("subject", "from", "body", "content", "text", "html")
             ):
+                self._log(f"[HotmailAPI] API 返回单个邮件对象")
                 return [data]
+            self._log(f"[HotmailAPI] 无法从返回数据中提取邮件列表")
+        else:
+            self._log(f"[HotmailAPI] API 返回未知数据类型: {type(data)}")
         return []
 
     def _extract_message_id(self, message: dict, index: int = 0) -> str:
@@ -4511,33 +4524,52 @@ class HotmailAPIMailbox(BaseMailbox):
                 messages = self._list_new_messages(
                     refresh_token, client_id, account.email
                 )
+                
+                # 调试日志：显示获取到的邮件数量
+                self._log(f"[HotmailAPI] 本次轮询获取到 {len(messages)} 封邮件")
 
                 for i, message in enumerate(messages):
                     message_id = self._extract_message_id(message, i)
+                    
+                    # 调试日志：显示邮件 ID
+                    self._log(f"[HotmailAPI] 处理邮件 #{i+1}, ID: {message_id}")
+                    
                     if message_id in seen:
+                        self._log(f"[HotmailAPI] 邮件 {message_id} 已处理过，跳过")
                         continue
                     
                     search_text = self._build_search_text(message)
+                    
+                    # 调试日志：显示邮件内容摘要
+                    preview = search_text[:100] if search_text else "(空内容)"
+                    self._log(f"[HotmailAPI] 邮件内容预览: {preview}")
+                    
                     if keyword and keyword.lower() not in search_text.lower():
-                        # Still add to seen if it doesn't match keyword, to avoid re-scanning
+                        self._log(f"[HotmailAPI] 邮件不包含关键词 '{keyword}'，跳过")
                         seen.add(message_id)
                         continue
 
                     code = self._extract_code_from_message(message, code_pattern)
                     
-                    # [Bugfix] Only add to seen if we successfully processed/extracted (or decided it's invalid)
-                    # For HotmailAPI, the message is already in memory, so if code is None, 
-                    # it means it's really not there.
+                    # 调试日志：显示提取结果
+                    if code:
+                        self._log(f"[HotmailAPI] 从邮件中提取到验证码: {code}")
+                    else:
+                        self._log(f"[HotmailAPI] 未能从邮件中提取验证码")
+                    
                     seen.add(message_id)
 
                     if code and code in exclude_codes:
+                        self._log(f"[HotmailAPI] 验证码 {code} 在排除列表中，跳过")
                         continue
                     if code:
-                        self._log(f"[HotmailAPI] 成功提取验证码: {code}")
+                        self._log(f"[HotmailAPI] ✅ 成功提取验证码: {code}")
                         return code
 
             except Exception as e:
                 self._log(f"[HotmailAPI] 轮询失败: {e}")
+                import traceback
+                self._log(f"[HotmailAPI] 错误详情: {traceback.format_exc()}")
             return None
 
         return self._run_polling_wait(
