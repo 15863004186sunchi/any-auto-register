@@ -4540,6 +4540,7 @@ class HotmailAPIMailbox(BaseMailbox):
         def poll_once() -> Optional[str]:
             for mb in ["INBOX", "Junk"]:
                 try:
+                    # 获取该文件夹下的最新邮件
                     messages = self._list_new_messages(
                         refresh_token, client_id, account.email, mailbox=mb
                     )
@@ -4547,6 +4548,7 @@ class HotmailAPIMailbox(BaseMailbox):
                     self._log(f"[HotmailAPI] 文件夹 {mb} 获取到 {len(messages)} 封邮件")
 
                     for i, message in enumerate(messages):
+                        # 唯一标识：文件夹 + MessageID
                         message_id = f"{mb}:{self._extract_message_id(message, i)}"
                         
                         if message_id in seen:
@@ -4556,45 +4558,45 @@ class HotmailAPIMailbox(BaseMailbox):
                         subject = str(message.get("subject", "")).strip()
                         sender = str(message.get("from", "")).strip() or str(message.get("sender", "")).strip()
                         
-                        self._log(f"[HotmailAPI] 正在检查邮件 - ID: {message_id}, 发件人: {sender}, 主题: {subject}")
+                        self._log(f"[HotmailAPI] 正在检查邮件 - ID: {message_id}, 来自: {sender}, 主题: {subject}")
                         
-                        # 放宽关键词匹配：OpenAI 或 ChatGPT 均可
+                        # 判断是否匹配关键词 (OpenAI 或 ChatGPT)
                         match_keyword = False
                         if not keyword:
                             match_keyword = True
                         else:
                             import re
-                            # 将关键词转为正则模式，支持 OpenAI|ChatGPT
+                            # 正则匹配，放宽关键词
                             pattern = keyword.replace("OpenAI", "(OpenAI|ChatGPT)")
                             if re.search(pattern, search_text, re.IGNORECASE):
                                 match_keyword = True
                         
                         if not match_keyword:
-                            self._log(f"[HotmailAPI] 邮件内容不匹配关键词 '{keyword}'，标记为已读并跳过")
-                            seen.add(message_id)
+                            self._log(f"[HotmailAPI] 邮件内容不匹配关键词 '{keyword}'，标记为已查看并略过")
+                            seen.add(message_id) # 不相关的邮件，记录为已见，不再扫描
                             continue
 
+                        # 提取验证码
                         code = self._extract_code_from_message(message, code_pattern)
                         
                         if code:
-                            self._log(f"[HotmailAPI] 从 {mb} 提取到验证码: {code}")
+                            self._log(f"[HotmailAPI] 从 {mb} 成功提取到验证码: {code}")
                             
                             if code in exclude_codes:
-                                self._log(f"[HotmailAPI] 验证码 {code} 在排除列表中，跳过")
-                                seen.add(message_id) # 排除掉的也不再重复检查
+                                self._log(f"[HotmailAPI] 验证码 {code} 在排除名单中，略过")
+                                seen.add(message_id) # 即使在排除名单，也是已处理过的邮件
                                 continue
                             
-                            self._log(f"[HotmailAPI] ✅ 成功提取有效验证码: {code}")
-                            seen.add(message_id)
+                            self._log(f"[HotmailAPI] ✅ 验证码提取成功: {code}")
+                            seen.add(message_id) # 只有成功提取并使用的验证码，才标记为 seen (或者确定无效的)
                             return code
                         else:
-                            self._log(f"[HotmailAPI] 匹配关键词但未提取到验证码，稍后重试")
-                            # 注意：这里不加进 seen，因为可能邮件还没加载全，或者验证码还没出现在内容里（极少数情况）
-                            # 但为了防止死循环扫描同一封无用邮件，如果这封邮件已经存在很久了，还是得加进 seen
-                            # 暂时先不加，观察日志
+                            self._log(f"[HotmailAPI] 匹配关键词但尚未捕获验证码，保留在池中待下次重试")
+                            # 重要：这里不调用 seen.add(message_id)！
+                            # 这样如果邮件内容尚未同步完全，下次轮询还能继续检查这封邮件。
 
                 except Exception as e:
-                    self._log(f"[HotmailAPI] 文件夹 {mb} 轮询失败: {e}")
+                    self._log(f"[HotmailAPI] 文件夹 {mb} 轮询过程中断: {e}")
             return None
 
 
